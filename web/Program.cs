@@ -3,8 +3,9 @@ using XtsRpcClient;
 using XtsWeb;
 
 // 命令列：與 csharp/ console 相同的 --netid / --port / --mover-path / --station-path /
-// --mover-via-control / --station-via-control / --poll-ms / --retry-ms / --retry-timeout-ms；--no-detail-status 關掉 mover / 站 M_GetStatus 輪詢；
+// --mover-via-control / --station-via-control / --poll-ms / --retry-ms / --retry-timeout-ms / --lang；--no-detail-status 關掉 mover / 站 M_GetStatus 輪詢；
 // 其餘 (例如 --urls) 交給 ASP.NET Core。
+Text.UseUtf8Console();     // 共用層的重試 log 有中文
 var (optArgs, webArgs, detail) = SplitArgs(args);
 Options opt;
 try
@@ -99,7 +100,7 @@ return 0;
 
 static (string[] Opt, string[] Web, bool Detail) SplitArgs(string[] all)
 {
-    string[] withValue = { "--netid", "--port", "--control-path", "--mover-path", "--station-path", "--init-timeout", "--step-timeout", "--poll-ms", "--retry-ms", "--retry-timeout-ms" };
+    string[] withValue = { "--netid", "--port", "--control-path", "--mover-path", "--station-path", "--init-timeout", "--step-timeout", "--poll-ms", "--retry-ms", "--retry-timeout-ms", "--lang" };
     string[] flags = { "--mover-via-control", "--station-via-control" };
     var o = new List<string>();
     var w = new List<string>();

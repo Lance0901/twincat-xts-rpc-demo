@@ -48,6 +48,9 @@ internal sealed class Options
     /// <summary>重送的總時間上限 (ms，牆鐘)；到了仍沒被收下就當失敗回報。0 = 不重試。</summary>
     public int RetryTimeoutMs { get; private set; } = 5000;
 
+    /// <summary>console 輸出語言 (--lang zh|en)；Parse 會同步設定 Text.Lang。</summary>
+    public Lang Lang { get; private set; } = Lang.Zh;
+
     public AmsNetId AmsNetId => NetId is null ? AmsNetId.Local : new AmsNetId(NetId);
 
     public string MoverPath(int mover) => string.Format(MoverPathTemplate, mover);
@@ -63,9 +66,12 @@ internal sealed class Options
     public static Options Parse(string[] args)
     {
         var o = new Options();
+        // 先抓 --lang，讓後面的錯誤訊息與 --help 不管參數順序都用指定語言
+        int langAt = Array.LastIndexOf(args, "--lang");
+        if (langAt >= 0 && langAt + 1 < args.Length && TryParseLang(args[langAt + 1], out var early)) Text.Lang = early;
         for (int i = 0; i < args.Length; i++)
         {
-            string Next() => i + 1 < args.Length ? args[++i] : throw new ArgumentException($"{args[i]} 缺少值");
+            string Next() => i + 1 < args.Length ? args[++i] : throw new ArgumentException(Text.MissingValue(args[i]));
             switch (args[i])
             {
                 case "--netid": o.NetId = Next(); break;
@@ -80,37 +86,34 @@ internal sealed class Options
                 case "--poll-ms": o.PollMs = int.Parse(Next()); break;
                 case "--retry-ms": o.RetryMs = int.Parse(Next()); break;
                 case "--retry-timeout-ms": o.RetryTimeoutMs = int.Parse(Next()); break;
+                case "--lang":
+                    string v = Next();
+                    o.Lang = TryParseLang(v, out var lang) ? lang : throw new ArgumentException(Text.BadLang(v));
+                    Text.Lang = lang;
+                    break;
                 case "-h":
                 case "--help":
                     PrintHelp();
                     Environment.Exit(0);
                     break;
                 default:
-                    throw new ArgumentException($"未知參數 {args[i]}，用 --help 看說明");
+                    throw new ArgumentException(Text.UnknownArg(args[i]));
             }
         }
-        if (o.RetryMs <= 0) throw new ArgumentException("--retry-ms 必須 > 0");
-        if (o.RetryTimeoutMs < 0) throw new ArgumentException("--retry-timeout-ms 必須 >= 0");
+        if (o.RetryMs <= 0) throw new ArgumentException(Text.RetryMsPositive);
+        if (o.RetryTimeoutMs < 0) throw new ArgumentException(Text.RetryTimeoutNonNegative);
         return o;
     }
 
-    private static void PrintHelp()
+    private static bool TryParseLang(string value, out Lang lang)
     {
-        Console.WriteLine("""
-            XtsRpcClient — 用 InvokeRpcMethod 控制 XTS 模擬 (TwinCAT PLC {attribute 'TcRpcEnable'} method)
-
-              --netid <AmsNetId>         預設 AmsNetId.Local；連 UmRT 要給 UmRT 的 AmsNetId (否則 ADS error 6)
-              --port <n>                 預設 851
-              --control-path <path>      預設 MAIN.fbXts
-              --mover-path <template>    預設 MAIN.fbXts.aMover[{0}]；備案 MAIN.refMover{0}
-              --station-path <template>  預設 MAIN.fbXts.{0} ({0} = fbLoad / fbPress / fbUnload)
-              --mover-via-control        mover 命令改走總控 M_MoveTo
-              --station-via-control      站命令改走總控 M_StartStation / M_ReleaseStation
-              --init-timeout <s>         預設 900 (UmRT 比實際慢，放寬)
-              --step-timeout <s>         預設 900
-              --poll-ms <ms>             預設 500
-              --retry-ms <ms>            PLC 回「上一個命令還沒被收下」時的重送間隔，預設 200
-              --retry-timeout-ms <ms>    重送總上限，預設 5000；0 = 不重試
-            """);
+        switch (value.ToLowerInvariant())
+        {
+            case "zh": lang = Lang.Zh; return true;
+            case "en": lang = Lang.En; return true;
+            default: lang = Lang.Zh; return false;
+        }
     }
+
+    private static void PrintHelp() => Console.WriteLine(Text.Help);
 }

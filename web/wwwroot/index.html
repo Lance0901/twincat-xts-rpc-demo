@@ -12,35 +12,36 @@
   <span id="modeBadge" class="badge">-</span>
   <span id="connBadge" class="badge">-</span>
   <span id="modeSwitch" class="grow"></span>
-  <span class="hint">Load 放料 → Press 下壓 → Unload 取出</span>
+  <span class="hint" data-i18n="hint">Load 放料 → Press 下壓 → Unload 取出</span>
+  <label><span data-i18n="langLabel">語言</span> <select id="langSel"><option value="zh">中文</option><option value="en">English</option></select></label>
 </header>
 <div id="banner" class="banner" hidden></div>
 
 <main>
   <section class="scene">
-    <svg id="scene" viewBox="0 0 1660 590" role="img" aria-label="XTS 軌道、站與 mover"></svg>
+    <svg id="scene" viewBox="0 0 1660 590" role="img" aria-label="XTS 軌道、站與 mover" data-i18n-aria="sceneAria"></svg>
     <div class="legend">
-      <span><i class="sw" style="background:var(--idle)"></i>mover 待命</span>
-      <span><i class="sw" style="background:var(--busy)"></i>busy（移動／CA 排隊）</span>
-      <span><i class="sw" style="background:var(--err)"></i>error</span>
-      <span><i class="sw" style="background:var(--off)"></i>未送電</span>
-      <span><svg width="26" height="18" viewBox="0 0 26 18"><rect x="3" y="2" width="20" height="14" class="part-has"/></svg>有工件</span>
-      <span><svg width="26" height="18" viewBox="0 0 26 18"><rect x="3" y="6" width="20" height="10" class="part-pressed"/></svg>已壓</span>
-      <span><svg width="26" height="18" viewBox="0 0 26 18"><rect x="3" y="2" width="20" height="14" class="part-empty"/></svg>空</span>
+      <span><i class="sw" style="background:var(--idle)"></i><span data-i18n="legIdle">mover 待命</span></span>
+      <span><i class="sw" style="background:var(--busy)"></i><span data-i18n="legBusy">busy（移動／CA 排隊）</span></span>
+      <span><i class="sw" style="background:var(--err)"></i><span data-i18n="legError">error</span></span>
+      <span><i class="sw" style="background:var(--off)"></i><span data-i18n="legOff">未送電</span></span>
+      <span><svg width="26" height="18" viewBox="0 0 26 18"><rect x="3" y="2" width="20" height="14" class="part-has"/></svg><span data-i18n="legHas">有工件</span></span>
+      <span><svg width="26" height="18" viewBox="0 0 26 18"><rect x="3" y="6" width="20" height="10" class="part-pressed"/></svg><span data-i18n="legPressed">已壓</span></span>
+      <span><svg width="26" height="18" viewBox="0 0 26 18"><rect x="3" y="2" width="20" height="14" class="part-empty"/></svg><span data-i18n="legEmpty">空</span></span>
     </div>
     <div class="tables">
-      <table id="moverTable"><thead><tr><th>mover</th><th>位置 mm</th><th>速度</th><th>狀態</th><th>工件</th><th>站</th></tr></thead><tbody></tbody></table>
-      <table id="stationTable"><thead><tr><th>站</th><th>狀態</th><th>步驟</th><th>mover</th><th>X / Y / Z mm</th><th>夾</th><th>完成</th></tr></thead><tbody></tbody></table>
+      <table id="moverTable"><thead><tr><th data-i18n="thMover">mover</th><th data-i18n="thPos">位置 mm</th><th data-i18n="thVel">速度</th><th data-i18n="thState">狀態</th><th data-i18n="thPart">工件</th><th data-i18n="thStation">站</th></tr></thead><tbody></tbody></table>
+      <table id="stationTable"><thead><tr><th data-i18n="thStation">站</th><th data-i18n="thState">狀態</th><th data-i18n="thStep">步驟</th><th data-i18n="thMover">mover</th><th data-i18n="thXyz">X / Y / Z mm</th><th data-i18n="thGrip">夾</th><th data-i18n="thDone">完成</th></tr></thead><tbody></tbody></table>
     </div>
   </section>
 
   <aside class="panel">
     <div class="card" id="statusCard">
-      <h2>狀態</h2>
+      <h2 data-i18n="statusTitle">狀態</h2>
       <div class="row">
         <span>bReady <b id="readyBadge" class="badge">-</b></span>
-        <span>模式 <b id="modeNow" class="badge">-</b></span>
-        <span>循環 <b id="cycleNow" class="badge">-</b></span>
+        <span><span data-i18n="modeLabel">模式</span> <b id="modeNow" class="badge">-</b></span>
+        <span><span data-i18n="cycleLabel">循環</span> <b id="cycleNow" class="badge">-</b></span>
       </div>
       <ol id="initSteps" class="steps"></ol>
       <div class="msg" id="initMsg">sStepMsg：-</div>
@@ -48,7 +49,7 @@
     </div>
 
     <div class="card">
-      <h2>整線 <small>FB_XTS_Control</small></h2>
+      <h2><span data-i18n="lineTitle">整線</span> <small>FB_XTS_Control</small></h2>
       <div class="row">
         <button id="btnInitial" class="primary">Initial</button>
         <button id="btnManual">Manual</button>
@@ -62,11 +63,11 @@
     </div>
 
     <div class="card">
-      <h2>選 mover <small>FB_Mover</small></h2>
+      <h2><span data-i18n="moverTitle">選 mover</span> <small>FB_Mover</small></h2>
       <div class="row">
         <label>mover <select id="moverSel"></select></label>
-        <label>位置 mm <input id="posIn" type="number" value="500" step="10" min="0" max="2999"></label>
-        <label>速度 mm/s <input id="velIn" type="number" value="300" step="50"></label>
+        <label><span data-i18n="posLabel">位置 mm</span> <input id="posIn" type="number" value="500" step="10" min="0" max="2999"></label>
+        <label><span data-i18n="velLabel">速度 mm/s</span> <input id="velIn" type="number" value="300" step="50"></label>
       </div>
       <div class="row">
         <button id="btnMoveTo" class="primary">MoveTo</button>
@@ -74,15 +75,15 @@
         <button id="btnMoverReset">Reset</button>
       </div>
       <div class="row">
-        <label>站 <select id="sendStation"></select></label>
+        <label><span data-i18n="stationLabel">站</span> <select id="sendStation"></select></label>
         <button id="btnSend">SendToStation</button>
       </div>
     </div>
 
     <div class="card">
-      <h2>選站 <small>FB_Station</small></h2>
+      <h2><span data-i18n="stationTitle">選站</span> <small>FB_Station</small></h2>
       <div class="row">
-        <label>站 <select id="stationSel"></select></label>
+        <label><span data-i18n="stationLabel">站</span> <select id="stationSel"></select></label>
         <button id="btnStStart" class="primary">Start</button>
         <button id="btnStRelease">Release</button>
         <button id="btnStReset">Reset</button>
@@ -90,29 +91,30 @@
     </div>
 
     <div class="card">
-      <h2>結果 <small>accepted / sMsg</small></h2>
+      <h2><span data-i18n="resultTitle">結果</span> <small>accepted / sMsg</small></h2>
       <div id="result" class="result">-</div>
       <ul id="log" class="log"></ul>
     </div>
 
     <div class="card" id="offlineTools" hidden>
-      <h2>Offline 工具 <small>只在模擬器</small></h2>
+      <h2><span data-i18n="offlineTitle">Offline 工具</span> <small data-i18n="offlineOnly">只在模擬器</small></h2>
       <div class="row">
-        速度
+        <span data-i18n="speedLabel">速度</span>
         <button data-speed="1" class="speed on">1×</button>
         <button data-speed="2" class="speed">2×</button>
         <button data-speed="4" class="speed">4×</button>
         <button data-speed="8" class="speed">8×</button>
       </div>
       <div class="row">
-        <button id="btnInject">對所選 mover 製造 error</button>
-        <label class="inline"><input type="checkbox" id="chkFailInit"> 下次 Initial 失敗</label>
-        <button id="btnRestart">重設模擬</button>
+        <button id="btnInject" data-i18n="inject">對所選 mover 製造 error</button>
+        <label class="inline"><input type="checkbox" id="chkFailInit"> <span data-i18n="failInit">下次 Initial 失敗</span></label>
+        <button id="btnRestart" data-i18n="restart">重設模擬</button>
       </div>
     </div>
   </aside>
 </main>
 
+<script src="js/i18n.js"></script>
 <script src="js/sim.js"></script>
 <script src="js/live.js"></script>
 <script src="js/app.js"></script>

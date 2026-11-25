@@ -16,8 +16,8 @@ internal sealed record RpcResult(object? ReturnValue, object[] Outputs)
 
     /// <summary>重試狀況的一行說明；沒重試時是空字串。</summary>
     public string RetryNote => NotTakenTimeout
-        ? $"重試 {Attempts - 1} 次後放棄：PLC 在逾時內一直沒收下上一個命令"
-        : Attempts > 1 ? $"重試 {Attempts - 1} 次後收下" : "";
+        ? Text.RetryGaveUp(Attempts - 1)
+        : Attempts > 1 ? Text.RetryTaken(Attempts - 1) : "";
 
     /// <summary>第 index 個 VAR_OUTPUT (順序 = PLC 宣告順序)。</summary>
     public T Out<T>(int index) => (T)Convert.ChangeType(Outputs[index], typeof(T));
@@ -63,13 +63,13 @@ internal sealed class XtsRpc
         {
             if (sw.ElapsedMilliseconds + _opt.RetryMs > _opt.RetryTimeoutMs)
             {
-                Log?.Invoke($"   {method}: {attempts} 次都回 \"{r.Msg(0)}\"，已達 {_opt.RetryTimeoutMs} ms 上限，放棄");
+                Log?.Invoke("   " + Text.RetryLimitLog(method, attempts, r.Msg(0), _opt.RetryTimeoutMs));
                 return r with { Attempts = attempts, NotTakenTimeout = true };
             }
             Thread.Sleep(_opt.RetryMs);
             attempts++;
             r = Call(path, method, args);
-            Log?.Invoke($"   {method}: 第 {attempts} 次 ({sw.ElapsedMilliseconds} ms) -> {r.Ok}，sMsg = \"{r.Msg(0)}\"");
+            Log?.Invoke("   " + Text.RetryAttemptLog(method, attempts, sw.ElapsedMilliseconds, r.Ok, r.Msg(0)));
         }
         return r with { Attempts = attempts };
     }
@@ -109,8 +109,7 @@ internal sealed class XtsRpc
         var r = Call(_opt.ControlPath, "M_GetStatus");
         if (r.Outputs[0] is not byte[] raw)
         {
-            throw new InvalidOperationException(
-                $"M_GetStatus stLine 回傳型別是 {r.Outputs[0]?.GetType().Name ?? "null"}，預期 byte[]");
+            throw new InvalidOperationException(Text.GetStatusTypeMismatch(r.Outputs[0]?.GetType().Name ?? "null"));
         }
         return (LineStatus.Parse(raw), r.Msg(1));
     }
@@ -155,9 +154,9 @@ internal sealed record InitTrace(uint FindMover1Ms, bool FindMover1Detected, uin
 {
     public override string ToString()
     {
-        static string T(uint ms) => ms == 0 ? "未完成" : $"{ms / 1000.0:F2} s";
-        string find = FindMover1Ms == 0 ? "未完成" : $"{T(FindMover1Ms)} ({(FindMover1Detected ? "detection valid" : "skipped")})";
-        return $"FindMover1 {find}；PowerOn {T(PowerOnMs)}；EnableGroup {T(GroupMs)} (PLC 時間)";
+        static string T(uint ms) => ms == 0 ? Text.NotDone : $"{ms / 1000.0:F2} s";
+        string find = FindMover1Ms == 0 ? Text.NotDone : $"{T(FindMover1Ms)} ({(FindMover1Detected ? "detection valid" : "skipped")})";
+        return Text.InitTraceText(find, T(PowerOnMs), T(GroupMs));
     }
 }
 
@@ -196,7 +195,7 @@ internal sealed record LineStatus(
     {
         if (raw.Length < Size)
         {
-            throw new InvalidOperationException($"ST_LineStatus 長度 {raw.Length}，預期 {Size}");
+            throw new InvalidOperationException(Text.LineStatusLength(raw.Length, Size));
         }
         using var br = new BinaryReader(new MemoryStream(raw), Encoding.ASCII);
         bool ready = br.ReadBoolean();

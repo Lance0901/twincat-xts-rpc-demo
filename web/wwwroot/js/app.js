@@ -2,13 +2,15 @@
 (function () {
   'use strict';
 
+  var I18N = window.XtsI18n, t = I18N.t;   // 介面文字全在 i18n.js
+
   // ---- 軌道示意座標 (SVG 單位 = mm)。環上位置 0 的實際起點未知，這裡把 1550 mm 當上直線段左端 ----
   var TRACK = 3000, STRAIGHT = 1100, ARC = 400, R = ARC / Math.PI;
   var X0 = 175, T = 280, S_TOP = 1550;
   var STATIONS = [
-    { id: 1, name: 'Load', pos: 1600, kind: 'gantry', trayName: '供料' },
+    { id: 1, name: 'Load', pos: 1600, kind: 'gantry', trayKey: 'trayLoad' },
     { id: 2, name: 'Press', pos: 2100, kind: 'press' },
-    { id: 3, name: 'Unload', pos: 2600, kind: 'gantry', trayName: '出料' },
+    { id: 3, name: 'Unload', pos: 2600, kind: 'gantry', trayKey: 'trayUnload' },
   ];
   var STATE_NAME = { 0: 'Idle', 10: 'Busy', 20: 'Done', 900: 'Error' };
   var CYCLE_NAME = { 0: 'Idle', 10: 'ToStation', 20: 'InStation', 100: 'Done', 800: 'Stopped', 900: 'Error' };
@@ -44,7 +46,7 @@
   var isOffline = backend.kind === 'offline';
 
   // ---- 靜態場景 ----
-  var svg = $('scene'), gStation = {}, gMover = {}, trayParts = {};
+  var svg = $('scene'), gStation = {}, gMover = {}, trayParts = {}, trackCaption = null;
   function buildScene() {
     var d = 'M ' + X0 + ' ' + T + ' L ' + (X0 + STRAIGHT) + ' ' + T +
       ' A ' + R + ' ' + R + ' 0 0 1 ' + (X0 + STRAIGHT) + ' ' + (T + 2 * R) +
@@ -60,9 +62,15 @@
       gStation[st.id] = { g: g, x: p.x };
       buildStation(st, gStation[st.id]);
     });
-    var ctr = el('text', { x: X0 + STRAIGHT / 2, y: T + R + 8, class: 'st-sub', 'text-anchor': 'middle' }, svg);
-    ctr.textContent = '軌道 3000 mm（示意：直線 1100 mm × 2 + 半圓弧 400 mm × 2）';
+    trackCaption = el('text', { x: X0 + STRAIGHT / 2, y: T + R + 8, class: 'st-sub', 'text-anchor': 'middle' }, svg);
+    sceneText();
     for (var i = 1; i <= 4; i++) buildMover(i);
+  }
+
+  // 場景裡跟語言有關的固定文字；換語言時重設
+  function sceneText() {
+    trackCaption.textContent = t('trackCaption');
+    STATIONS.forEach(function (st) { if (st.trayKey) gStation[st.id].trayLabel.textContent = t(st.trayKey); });
   }
 
   function partRect(parent, cls, x, y, w, h) {
@@ -89,8 +97,7 @@
       // 取 / 放料盤在 X = 300 mm
       el('rect', { x: 262, y: 250, width: 76, height: 10, rx: 2, class: 'tray' }, g);
       trayParts[st.id] = partRect(g, 'part-has', 290, 236, 20, 14);
-      var tl = el('text', { x: 300, y: 226, class: 'st-sub', 'text-anchor': 'middle' }, g);
-      tl.textContent = st.trayName;
+      o.trayLabel = el('text', { x: 300, y: 226, class: 'st-sub', 'text-anchor': 'middle' }, g);
       if (st.id === 3) o.outCount = el('text', { x: 300, y: 278, class: 'st-sub', 'text-anchor': 'middle' }, g);
     }
   }
@@ -120,7 +127,7 @@
   }
   function moverState(m) {
     if (m.error) return 'error ' + hex(m.errorId);
-    if (!m.powered) return '未送電';
+    if (!m.powered) return t('notPowered');
     return m.busy ? 'busy' : 'idle';
   }
   function hex(n) { return '16#' + Number(n).toString(16).toUpperCase(); }
@@ -174,7 +181,7 @@
         if (def.id === 1) show(trayParts[1], !(st.grip || (st.state === 10 && st.step >= 40)));
         else {
           show(trayParts[3], st.doneCount > 0 && !st.grip);
-          o.outCount.textContent = '已出料 ' + st.doneCount;
+          o.outCount.textContent = t('outCount', st.doneCount);
         }
       }
     });
@@ -184,10 +191,10 @@
   function renderPanel(s) {
     var rb = $('readyBadge'); rb.textContent = s.ready ? 'TRUE' : 'FALSE'; rb.className = 'badge ' + (s.ready ? 'good' : 'bad');
     var mb = $('modeNow'); mb.textContent = s.mode === 1 ? 'Auto' : 'Manual'; mb.className = 'badge ' + (s.mode === 1 ? 'warn' : 'info');
-    var cb = $('cycleNow'); cb.textContent = CYCLE_NAME[s.cycleState] + (s.cycleMover ? ' (mover ' + s.cycleMover + ' → 站 ' + s.cycleStation + ')' : '');
+    var cb = $('cycleNow'); cb.textContent = CYCLE_NAME[s.cycleState] + (s.cycleMover ? t('cycleTarget', s.cycleMover, s.cycleStation) : '');
     cb.className = 'badge ' + (s.cycleState === 900 ? 'bad' : s.cycleState === 10 || s.cycleState === 20 ? 'warn' : s.cycleState === 100 ? 'good' : '');
-    $('initMsg').textContent = 'sStepMsg：' + (s.initMsg || '-') + (s.initError ? '  [error ' + hex(s.initErrorId) + ']' : '');
-    $('cycleMsg').textContent = 'sCycle：' + (s.cycleMsg || '-');
+    $('initMsg').textContent = t('labelValue', 'sStepMsg', (s.initMsg || '-') + (s.initError ? '  [error ' + hex(s.initErrorId) + ']' : ''));
+    $('cycleMsg').textContent = t('labelValue', 'sCycle', s.cycleMsg || '-');
     var idx = STEPS.indexOf(s.initStepName), failAt = -1;
     if (s.initStep === 900) failAt = STEPS.indexOf((s.initMsg || '').split(':')[0]);
     var lis = $('initSteps').children;
@@ -203,14 +210,14 @@
       var r = mt.rows[i] || mt.insertRow();
       r.className = m.id === sel ? 'sel' : '';
       r.innerHTML = '<td>' + m.id + '</td><td>' + f1(m.pos) + '</td><td>' + f1(m.vel) + '</td><td>' + moverState(m) +
-        '</td><td>' + (m.hasPart ? (m.pressed ? '已壓' : '有') : '空') + '</td><td>' + (m.station || '-') + '</td>';
+        '</td><td>' + (m.hasPart ? (m.pressed ? t('partPressed') : t('partHas')) : t('partEmpty')) + '</td><td>' + (m.station || '-') + '</td>';
     });
     var stt = $('stationTable').tBodies[0];
     s.stations.forEach(function (st, i) {
       var r = stt.rows[i] || stt.insertRow();
       r.innerHTML = '<td>' + st.id + ' ' + STATIONS[i].name + '</td><td>' + STATE_NAME[st.state] + (st.error ? ' ' + hex(st.errorId) : '') +
         '</td><td>' + st.step + '</td><td>' + (st.mover || '-') + '</td><td>' + f1(st.x) + ' / ' + f1(st.y) + ' / ' + f1(st.z) +
-        '</td><td>' + (st.grip ? '閉' : '開') + '</td><td>' + st.doneCount + '</td>';
+        '</td><td>' + (st.grip ? t('gripClosed') : t('gripOpen')) + '</td><td>' + st.doneCount + '</td>';
     });
   }
 
@@ -268,12 +275,42 @@
     STEPS.forEach(function (n) { var li = document.createElement('li'); li.textContent = n; $('initSteps').appendChild(li); });
   }
 
+  // ---- 連線狀態：存起來，換語言時可以重畫 ----
+  var conn = { state: isOffline ? 'sim' : 'connecting', error: '', warnings: [] };
+  var CONN_BADGE = {
+    sim: ['badgeSimulator', 'good'], connecting: ['connecting', ''], plcOk: ['plcConnected', 'good'],
+    plcDown: ['plcDisconnected', 'bad'], serverDown: ['serverDown', 'bad'],
+  };
+  function renderConn() {
+    var cb = $('connBadge'), b = $('banner'), m = CONN_BADGE[conn.state];
+    cb.textContent = t(m[0]); cb.className = 'badge ' + m[1];
+    if (conn.state === 'plcDown') {
+      b.hidden = false; b.textContent = t('plcConnectFail', conn.error);
+    } else if (conn.state === 'plcOk') {
+      b.hidden = conn.warnings.length === 0;
+      b.textContent = conn.warnings.length ? t('labelValue', 'detailWarnings', conn.warnings.join(' | ')) : '';
+    }
+  }
+
+  // 模式切換連結：網址上有 ?lang= 就帶著走
+  function modeHref(mode) { return '?mode=' + mode + (params.has('lang') ? '&lang=' + I18N.lang() : ''); }
+  function link(href, text) { var a = document.createElement('a'); a.href = href; a.textContent = text; return a; }
+
+  function headerText() {
+    var mb = $('modeBadge'), sw = $('modeSwitch');
+    mb.textContent = t(isOffline ? 'badgeOffline' : 'badgeLive'); mb.className = 'badge ' + (isOffline ? 'warn' : 'info');
+    sw.textContent = '';
+    if (isOffline && isFile) sw.textContent = t('fileOnlyOffline');
+    else sw.appendChild(link(modeHref(isOffline ? 'live' : 'offline'), t(isOffline ? 'switchLive' : 'switchOffline')));
+    renderConn();
+  }
+
   function header() {
-    var mb = $('modeBadge'), cb = $('connBadge'), sw = $('modeSwitch');
-    mb.textContent = isOffline ? 'Offline 模擬' : 'Live (PLC)'; mb.className = 'badge ' + (isOffline ? 'warn' : 'info');
+    var ls = $('langSel');
+    ls.value = I18N.lang();
+    ls.onchange = function () { I18N.setLang(ls.value); };
+    headerText();
     if (isOffline) {
-      cb.textContent = '模擬器'; cb.className = 'badge good';
-      if (!isFile) sw.innerHTML = '<a href="?mode=live">切換 Live</a>'; else sw.textContent = '開檔 (file://) 只有 Offline';
       $('offlineTools').hidden = false;
       document.querySelectorAll('button.speed').forEach(function (b) {
         b.onclick = function () {
@@ -284,28 +321,27 @@
       $('btnInject').onclick = function () { var n = num('moverSel'); run('inject error mover ' + n, 'injectMoverError', { mover: n }); };
       $('chkFailInit').onchange = function () { backend.setFailNextInit(this.checked); };
       $('btnRestart').onclick = function () { backend.restart(); $('log').innerHTML = ''; $('result').textContent = '-'; $('result').className = 'result'; };
-    } else {
-      cb.textContent = '連線中…'; cb.className = 'badge';
-      sw.innerHTML = '<a href="?mode=offline">切換 Offline</a>';
     }
   }
 
+  I18N.applyStatic();
   buildScene(); fillSelects(); wire(); header();
+  I18N.onChange(function (l) {
+    $('langSel').value = l;
+    sceneText(); headerText();
+    if (lastStatus) render(lastStatus);
+  });
   backend.start(function (s) {
     if (s.connected === false) {
-      $('connBadge').textContent = 'PLC 未連線'; $('connBadge').className = 'badge bad';
-      $('banner').hidden = false; $('banner').textContent = '連不上 PLC：' + (s.error || '') + '（server 會自動重試）';
+      conn.state = 'plcDown'; conn.error = s.error || ''; renderConn();
       return;
     }
     if (!isOffline) {
-      $('connBadge').textContent = 'PLC 已連線'; $('connBadge').className = 'badge good';
-      var w = s.detailWarnings || [];
-      $('banner').hidden = w.length === 0;
-      $('banner').textContent = w.length ? 'detailWarnings：' + w.join(' | ') : '';
+      conn.state = 'plcOk'; conn.warnings = s.detailWarnings || []; renderConn();
     }
     render(s);
   }, function (up) {
-    if (!up) { $('connBadge').textContent = '與 server 斷線'; $('connBadge').className = 'badge bad'; }
+    if (!up) { conn.state = 'serverDown'; renderConn(); }
   });
   window.__xts = { backend: backend };   // 給自動化測試用
 })();
