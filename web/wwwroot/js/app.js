@@ -297,7 +297,12 @@
       $('banner').hidden = false; $('banner').textContent = '連不上 PLC：' + (s.error || '') + '（server 會自動重試）';
       return;
     }
-    if (!isOffline) { $('connBadge').textContent = 'PLC 已連線'; $('connBadge').className = 'badge good'; $('banner').hidden = true; }
+    if (!isOffline) {
+      $('connBadge').textContent = 'PLC 已連線'; $('connBadge').className = 'badge good';
+      var w = s.detailWarnings || [];
+      $('banner').hidden = w.length === 0;
+      $('banner').textContent = w.length ? 'detailWarnings：' + w.join(' | ') : '';
+    }
     render(s);
   }, function (up) {
     if (!up) { $('connBadge').textContent = '與 server 斷線'; $('connBadge').className = 'badge bad'; }
