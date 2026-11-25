@@ -11,6 +11,8 @@ const double TrackLengthMm = 3000.0;
 const double CaGapMm = 110.0;
 double[] stationPosMm = { 1600.0, 2100.0, 2600.0 };    // 與 PLC GVL_Param.cStationPosMm 一致
 const double ParkPosMm = 2900.0;                       // 示範後把 mover 停到 Unload 後面
+const double PushMm = 150.0;                           // 第 4 段往前推的距離
+double[] stagePosMm = { 400.0, 700.0, 1000.0, 1300.0 }; // 起跑區排位：都在 Load - PushMm 之前，間距 > CA gap
 
 Text.UseUtf8Console();     // cp950 console 直接 dotnet run 中文也不亂碼
 
@@ -56,10 +58,14 @@ int Run(XtsRpc xts, Options opt)
         Say(Text.AlreadyReady);
     }
 
-    // 2. 初始化
-    if (!early.Ready)
+    // 2. 初始化 (已 ready 也印標題，說明為什麼略過)
+    Step(Text.Step2Title);
+    if (early.Ready)
     {
-        Step(Text.Step2Title);
+        Say(Text.InitSkipped);
+    }
+    else
+    {
         var init = xts.InitialXts();
         PrintCmd("M_InitialXTS", init);
         if (!init.Ok) return 1;
@@ -70,6 +76,13 @@ int Run(XtsRpc xts, Options opt)
     Step(Text.Step3Title);
     PrintCmd("M_SetMode(0)", xts.SetMode(0));
     var line = xts.GetLineStatus().Line;
+    // 重跑時上一輪的 mover 可能停在站區 / 2900 (ring 上不能超車，第 5 段會被 CA 擋住)，先排回起跑區
+    if (!AllInStartZone(line))
+    {
+        Say(Text.StagingMovers);
+        if (!StageMovers(xts, opt, line)) return 1;
+        line = xts.GetLineStatus().Line;
+    }
     int front = FindFrontMover(line);
     if (front == 0)
     {
@@ -83,7 +96,7 @@ int Run(XtsRpc xts, Options opt)
     Say(Text.InvalidParamDemo);
     PrintCmd("M_MoveTo(5000, 100)", xts.MoverMoveTo(front, 5000.0, 100.0));
     PrintCmd("M_MoveTo(100, -1)", xts.MoverMoveTo(front, 100.0, -1.0));
-    double target = Ring(line.Movers[front - 1].PositionMm + 150.0);
+    double target = Ring(line.Movers[front - 1].PositionMm + PushMm);
     if (!Cmd($"M_MoveTo({target:F1}, 300)", xts.MoverMoveTo(front, target, 300.0))) return 1;
     if (!WaitMoverIdle(xts, opt, front)) return 1;
     PrintMover(xts, opt, front);
@@ -257,12 +270,14 @@ bool WaitCycle(XtsRpc xts, Options opt)
     return false;
 }
 
-// 前方到 Unload + CA gap 之間沒有其他 mover 的那台 (CA 會讓 mover 排在前車後面)
+// 前方經 Load 到 Unload + CA gap 之間沒有其他 mover 的那台 (CA 會讓 mover 排在前車後面)
+// 送站與自動循環都先到 Load；mover 已過 Load 就要繞一圈，路徑上一定有車
 int FindFrontMover(LineStatus line)
 {
+    double loadToUnload = stationPosMm[StationUnload - 1] - stationPosMm[StationLoad - 1];
     for (int k = 0; k < LineStatus.MoverCount; k++)
     {
-        double path = Ring(stationPosMm[StationUnload - 1] - line.Movers[k].PositionMm) + CaGapMm;
+        double path = Ring(stationPosMm[StationLoad - 1] - line.Movers[k].PositionMm) + loadToUnload + CaGapMm;
         bool clear = true;
         for (int j = 0; j < LineStatus.MoverCount; j++)
         {
@@ -271,6 +286,44 @@ int FindFrontMover(LineStatus line)
         if (clear && !line.Movers[k].HasPart) return k + 1;
     }
     return 0;
+}
+
+// 起跑區 = [ParkPos + CA gap, Load - PushMm)：剛 Activate 的 mover 都在這裡，示範可以直接跑
+bool AllInStartZone(LineStatus line)
+{
+    double zoneStart = Ring(ParkPosMm + CaGapMm);
+    double zoneLen = Ring(stationPosMm[StationLoad - 1] - PushMm - zoneStart);
+    return line.Movers.All(m => Ring(m.PositionMm - zoneStart) < zoneLen);
+}
+
+// 依環上順序把 mover 排到 stagePosMm；只往正方向走、順序不變，所以不會互相擋死。挑最長單台行程最短的對應方式 (同時走，時間看最長那台)
+bool StageMovers(XtsRpc xts, Options opt, LineStatus line)
+{
+    int n = LineStatus.MoverCount;
+    int[] order = Enumerable.Range(0, n).OrderBy(k => Ring(line.Movers[k].PositionMm)).ToArray();
+    int bestShift = 0;
+    double bestMax = double.MaxValue;
+    for (int r = 0; r < n; r++)
+    {
+        double max = 0;
+        for (int i = 0; i < n; i++) max = Math.Max(max, Ring(stagePosMm[(i + r) % n] - line.Movers[order[i]].PositionMm));
+        if (max < bestMax) { bestMax = max; bestShift = r; }
+    }
+    var moved = new List<int>();
+    for (int i = 0; i < n; i++)
+    {
+        int mover = order[i] + 1;
+        double pos = stagePosMm[(i + bestShift) % n];
+        double d = Ring(pos - line.Movers[order[i]].PositionMm);
+        if (Math.Min(d, TrackLengthMm - d) < 1.0) continue;     // 已在位置上，不要繞一圈
+        if (!Cmd($"M_MoveTo({mover}, {pos}, 400)", xts.MoverMoveTo(mover, pos, 400.0))) return false;
+        moved.Add(mover);
+    }
+    foreach (int mover in moved)
+    {
+        if (!WaitMoverIdle(xts, opt, mover)) return false;
+    }
+    return true;
 }
 
 double Ring(double p) => ((p % TrackLengthMm) + TrackLengthMm) % TrackLengthMm;

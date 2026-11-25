@@ -364,8 +364,8 @@ dotnet run --project csharp -- --netid <UmRT 的 AmsNetId>
 | 段 | 做什麼 | 預期結果 |
 |---|---|---|
 | 1 | ready 前對 mover 2 下 `M_MoveTo` | 被拒：`XTS not ready, call M_InitialXTS first`（已 ready 則略過） |
-| 2 | `M_InitialXTS`，每 0.5 s 輪詢 `M_ReadXTS_Status` 印出步驟 | 到 Ready，並印初始化各步完成時間（逾時 900 s 牆鐘） |
-| 3 | `M_SetMode(0)` Manual；從 `M_GetStatus` 挑一台「前方到 Unload 沒有其他 mover」的 mover | `Mode -> Manual` |
+| 2 | `M_InitialXTS`，每 0.5 s 輪詢 `M_ReadXTS_Status` 印出步驟 | 到 Ready，並印初始化各步完成時間（逾時 900 s 牆鐘）；已 ready 則印標題後略過 |
+| 3 | `M_SetMode(0)` Manual；有 mover 不在起跑區（2900 + CA gap 到 Load − 150 mm）時，先依環上順序排到 400 / 700 / 1000 / 1300 mm（重跑時上一輪的 mover 停在 Unload / 2900）；再挑一台「前方經 Load 到 Unload 沒有其他 mover」的 mover | `Mode -> Manual` |
 | 4 | 單一 mover（`aMover[n]`）：`M_GetStatus` → 不合法參數兩次（位置 5000、速度 -1）→ `M_MoveTo` 往前 150 mm → 等停 → `M_Stop` | 兩次被拒（範圍錯誤訊息）、一次 Accepted、Stop 永遠 Accepted |
 | 5 | 單站：`M_SendToStation` 送到 Load → 站 `M_Start` → 等 Done → `M_Release`，Press、Unload 同樣；最後停到 2900 mm 讓路 | 印出每步 XYZ 與 mover 的 `bHasPart` / `bPressed` 變化 |
 | 6 | `M_SetMode(1)` Auto，再對 mover 下 `M_MoveTo` | 被拒：`Rejected in Auto mode, call M_SetMode(0) first` |

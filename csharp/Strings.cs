@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 
 namespace XtsRpcClient;
 
@@ -119,13 +119,19 @@ internal static class Text
 
     public static string Step2Title => P("2. M_InitialXTS，輪詢 M_ReadXTS_Status 直到 ready", "2. M_InitialXTS, poll M_ReadXTS_Status until ready");
 
+    public static string InitSkipped => P("XTS 已 ready，不重新初始化", "XTS is already ready, skipping M_InitialXTS");
+
+    public static string StagingMovers => P(
+        "有 mover 不在 Load 前的起跑區 (上一輪停在站區或 2900)，先依環上順序排到 400 / 700 / 1000 / 1300 mm",
+        "Some movers are outside the start zone before Load (left at a station or 2900 by a previous run); staging them in ring order at 400 / 700 / 1000 / 1300 mm");
+
     public static string Step3Title => "3. M_SetMode(0) Manual";
 
     public static string NoClearMover => P(
-        "找不到路徑淨空的 mover (每台前方到 Unload + CA gap 都有車)，請先手動排開",
-        "No mover with a clear path (every mover has another one ahead before Unload + CA gap); move them apart manually first");
+        "找不到路徑淨空的 mover (每台前方經 Load 到 Unload + CA gap 都有車)，請先手動排開",
+        "No mover with a clear path (every mover has another one ahead via Load up to Unload + CA gap); move them apart manually first");
 
-    public static string PickedMover(int mover) => P($"選 mover {mover}：前方到 Unload 沒有其他 mover", $"Picked mover {mover}: no other mover ahead up to Unload");
+    public static string PickedMover(int mover) => P($"選 mover {mover}：前方經 Load 到 Unload 沒有其他 mover", $"Picked mover {mover}: no other mover ahead via Load up to Unload");
 
     public static string ViaControl(string path, string method) => P($"{path} ({method} 備案)", $"{path} ({method} fallback)");
 
