@@ -1,0 +1,255 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_Mover" Id="{4539f930-5a3a-4d7c-80e9-3ef9bb344666}" SpecialFunc="None">
+    <Declaration><![CDATA[// 一個 XTS mover：MC_Power + CA 移動 / 停止 + 工件狀態。命令由 method 設旗標，body 每 cycle 執行。
+// 前置：FB_XTS_Control 每 cycle 呼叫並寫入 stPermit；CA group 已 enable 才能移動。
+FUNCTION_BLOCK FB_Mover
+VAR_INPUT
+    nIndex : INT;                   // mover 編號 1..cMoverCount
+    stPermit : ST_CmdPermit;        // 總控每 cycle 寫入
+    bPowerEnable : BOOL;            // 總控送電
+    bResetCmd : BOOL;               // 總控初始化時的 reset
+END_VAR
+VAR_IN_OUT
+    stAxis : AXIS_REF;
+END_VAR
+VAR_OUTPUT
+    fPositionMm : LREAL;            // 環上位置 (mm), 0~cTrackLengthMm
+    fVelocityMmS : LREAL;           // 實際速度 (mm/s)
+    bPowered : BOOL;
+    bBusy : BOOL;                   // 移動或停止中 (CA 排隊時也是 TRUE)
+    bDone : BOOL;                   // 最後一次移動到位
+    bError : BOOL;
+    nErrorId : UDINT;
+    bHasPart : BOOL;                // 有工件
+    bPressed : BOOL;                // 已下壓
+END_VAR
+VAR
+    fbPower : MC_Power;
+    fbReset : MC_Reset;
+    fbMove : Tc3_McCollisionAvoidance.MC_MoveAbsoluteCA;
+    fbHalt : Tc3_McCollisionAvoidance.MC_HaltCA;
+    fbMoveTimer : TON;
+    eMoveState : E_MoveState;
+    fTargetAbsMm : LREAL;           // NC 絕對目標 (mm)
+    fCmdVelocityMmS : LREAL;        // 本次移動速度 (mm/s)
+    bReqMove : BOOL;                // method 設，body 取走
+    fReqPositionMm : LREAL;
+    fReqVelocityMmS : LREAL;
+    bReqStop : BOOL;
+    bReqReset : BOOL;
+    bResetBusy : BOOL;              // MC_Reset 執行中
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[stAxis.ReadStatus();
+fbPower(Axis := stAxis, Enable := bPowerEnable, Enable_Positive := bPowerEnable,
+    Enable_Negative := bPowerEnable, Override := 100);
+bPowered := fbPower.Status;
+
+// 命令只在這裡取走；method 只設 bReq*
+IF bReqReset OR bResetCmd THEN
+    bReqReset := FALSE;
+    bResetBusy := TRUE;
+END_IF
+IF bReqStop THEN
+    bReqStop := FALSE;
+    bReqMove := FALSE;
+    eMoveState := E_MoveState.StartHalt;
+ELSIF bReqMove THEN
+    bReqMove := FALSE;
+    // 只往正方向走：目標 = 目前 + 環上差距
+    fTargetAbsMm := stAxis.NcToPlc.ActPos + F_RingPosition(
+        fPositionMm := fReqPositionMm - F_RingPosition(fPositionMm := stAxis.NcToPlc.ActPos, fLengthMm := GVL_Param.cTrackLengthMm),
+        fLengthMm := GVL_Param.cTrackLengthMm);
+    fCmdVelocityMmS := fReqVelocityMmS;
+    bDone := FALSE;
+    eMoveState := E_MoveState.StartMove;
+END_IF
+
+// MC FB 用上個 cycle 的狀態呼叫，StartMove / StartHalt 那個 cycle Execute = FALSE
+fbReset(Axis := stAxis, Execute := bResetBusy);
+fbMove(Axis := stAxis, Execute := (eMoveState = E_MoveState.Moving), Position := fTargetAbsMm,
+    Velocity := fCmdVelocityMmS, Acceleration := GVL_Param.cMoverAccMmS2,
+    Deceleration := GVL_Param.cMoverAccMmS2, Jerk := GVL_Param.cMoverJerkMmS3, Gap := GVL_Param.cCaGapMm);
+fbHalt(Axis := stAxis, Execute := (eMoveState = E_MoveState.Halting), Deceleration := GVL_Param.cMoverAccMmS2,
+    Jerk := GVL_Param.cMoverJerkMmS3, Gap := GVL_Param.cCaGapMm);
+fbMoveTimer(IN := (eMoveState = E_MoveState.Moving), PT := GVL_Param.cMoveTimeout);
+
+IF fbReset.Done OR fbReset.Error THEN
+    bResetBusy := FALSE;
+    IF fbReset.Done THEN
+        bError := FALSE;
+        nErrorId := 0;
+    END_IF
+END_IF
+
+CASE eMoveState OF
+E_MoveState.Idle:
+    ;
+E_MoveState.StartMove:
+    eMoveState := E_MoveState.Moving;
+E_MoveState.Moving:
+    IF fbMove.Done THEN
+        bDone := TRUE;
+        eMoveState := E_MoveState.Idle;
+    ELSIF fbMove.Error OR NOT bPowered THEN
+        eMoveState := E_MoveState.Idle;
+    ELSIF fbMoveTimer.Q THEN
+        bError := TRUE;
+        nErrorId := GVL_ErrorId.cErrMoveTimeout;
+        eMoveState := E_MoveState.Idle;
+    END_IF
+E_MoveState.StartHalt:
+    eMoveState := E_MoveState.Halting;
+E_MoveState.Halting:
+    IF fbHalt.Done OR fbHalt.Error OR NOT bPowered THEN
+        eMoveState := E_MoveState.Idle;
+    END_IF
+ELSE
+    bError := TRUE;
+    nErrorId := GVL_ErrorId.cErrInvalidState;
+    eMoveState := E_MoveState.Idle;
+END_CASE
+
+IF fbPower.Error THEN
+    bError := TRUE;
+    nErrorId := fbPower.ErrorID;
+ELSIF fbMove.Error THEN
+    bError := TRUE;
+    nErrorId := fbMove.ErrorId;
+ELSIF fbHalt.Error THEN
+    bError := TRUE;
+    nErrorId := fbHalt.ErrorId;
+ELSIF stAxis.Status.Error THEN
+    bError := TRUE;
+    nErrorId := stAxis.Status.ErrorID;
+END_IF
+
+fPositionMm := F_RingPosition(fPositionMm := stAxis.NcToPlc.ActPos, fLengthMm := GVL_Param.cTrackLengthMm);
+fVelocityMmS := stAxis.NcToPlc.ActVelo;
+bBusy := (eMoveState <> E_MoveState.Idle);]]></ST>
+    </Implementation>
+    <Method Name="M_MoveTo" Id="{6aa812ac-d282-4c4d-afbb-ea9a8b9037cf}">
+      <Declaration><![CDATA[// RPC：移到環上位置。需 ready + Manual。回 TRUE = 已接受 (不是已到位)。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_MoveTo : BOOL
+VAR_INPUT
+    fPosition : LREAL;      // 目標環上位置 (mm), 0 <= p < cTrackLengthMm
+    fVelocity : LREAL;      // 速度 (mm/s), 0 < v <= cMaxVelocityMmS
+END_VAR
+VAR_OUTPUT
+    sMsg : STRING;          // 拒絕原因或 'Accepted'
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF NOT F_CheckCmdAllowed(stPermit := stPermit, bNeedManual := TRUE, bNeedAuto := FALSE, sMsg => sMsg) THEN
+    M_MoveTo := FALSE;
+    RETURN;
+END_IF
+M_MoveTo := M_RequestMove(fPosition := fPosition, fVelocity := fVelocity, sMsg => sMsg);]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_RequestMove" Id="{3f285a3a-419c-47f4-b220-49f33d0810b9}">
+      <Declaration><![CDATA[// 內部用 (總控與 M_MoveTo 共用)：檢查參數後設移動命令，不檢查模式
+METHOD PUBLIC M_RequestMove : BOOL
+VAR_INPUT
+    fPosition : LREAL;      // 目標環上位置 (mm)
+    fVelocity : LREAL;      // 速度 (mm/s)
+END_VAR
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_RequestMove := FALSE;
+IF bReqMove OR bReqStop THEN
+    sMsg := 'Previous command not yet taken by PLC, retry';
+ELSIF bError THEN
+    sMsg := 'Mover in error, call M_InitialXTS';
+ELSIF NOT bPowered THEN
+    sMsg := 'Mover not powered';
+ELSIF (fPosition < 0.0) OR (fPosition >= GVL_Param.cTrackLengthMm) THEN
+    sMsg := CONCAT('Position out of range, 0 <= fPosition < ', LREAL_TO_STRING(GVL_Param.cTrackLengthMm));
+ELSIF (fVelocity <= 0.0) OR (fVelocity > GVL_Param.cMaxVelocityMmS) THEN
+    sMsg := CONCAT('Velocity out of range, 0 < fVelocity <= ', LREAL_TO_STRING(GVL_Param.cMaxVelocityMmS));
+ELSE
+    fReqPositionMm := fPosition;
+    fReqVelocityMmS := fVelocity;
+    bReqMove := TRUE;               // 旗標最後設
+    sMsg := 'Accepted';
+    M_RequestMove := TRUE;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_Stop" Id="{fa1b99c2-00a4-4e3a-9fc0-76eed751d570}">
+      <Declaration><![CDATA[// RPC：停止 (MC_HaltCA)。不受 ready / 模式限制，永遠接受。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_Stop : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bReqStop := TRUE;
+IF bPowered THEN
+    sMsg := 'Stop accepted';
+ELSE
+    sMsg := 'Not powered, nothing to stop';
+END_IF
+M_Stop := TRUE;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_Reset" Id="{453837a3-4df2-4e94-a140-a6d7871373b3}">
+      <Declaration><![CDATA[// RPC：MC_Reset。需 ready + Manual；掉出 ready 後的復歸請用 M_InitialXTS。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_Reset : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF NOT F_CheckCmdAllowed(stPermit := stPermit, bNeedManual := TRUE, bNeedAuto := FALSE, sMsg => sMsg) THEN
+    M_Reset := FALSE;
+    RETURN;
+END_IF
+bReqReset := TRUE;
+sMsg := 'Reset accepted';
+M_Reset := TRUE;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_GetStatus" Id="{c7c30e4f-5cc9-4927-ad8b-7169b6e8cf24}">
+      <Declaration><![CDATA[// RPC：讀狀態，隨時可讀
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_GetStatus : BOOL
+VAR_OUTPUT
+    fPosition : LREAL;      // 環上位置 (mm)
+    fVelocity : LREAL;      // 實際速度 (mm/s)
+    bBusy : BOOL;
+    bError : BOOL;
+    nErrorId : UDINT;
+    bHasPart : BOOL;
+    bPressed : BOOL;
+    bPowered : BOOL;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[fPosition := THIS^.fPositionMm;
+fVelocity := THIS^.fVelocityMmS;
+bBusy := THIS^.bBusy;
+bError := THIS^.bError;
+nErrorId := THIS^.nErrorId;
+bHasPart := THIS^.bHasPart;
+bPressed := THIS^.bPressed;
+bPowered := THIS^.bPowered;
+M_GetStatus := TRUE;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_SetPart" Id="{bdd356d5-99c3-49ef-b23d-e2665727d167}">
+      <Declaration><![CDATA[// 內部用：站完成後由總控更新工件狀態
+METHOD PUBLIC M_SetPart
+VAR_INPUT
+    bPart : BOOL;           // 有工件
+    bPress : BOOL;          // 已下壓
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bHasPart := bPart;
+bPressed := bPress;]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

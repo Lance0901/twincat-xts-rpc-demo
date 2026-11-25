@@ -1,0 +1,128 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_StationGantry" Id="{acb9cf2c-0ce6-4f2f-9e33-f2f0bc3efe73}" SpecialFunc="None">
+    <Declaration><![CDATA[// XYZ 取放站共用 (Load / Unload)：從 fPick 取料放到 fPlace。取放點由子類別 body 設定。
+// 步驟：10 XY 到取料點 → 20 Z 下 → 30 夾 → 40 Z 上 → 50 XY 到放料點 → 60 Z 下 → 70 放 → 80 Z 上
+FUNCTION_BLOCK FB_StationGantry EXTENDS FB_Station
+VAR_IN_OUT
+    aAxis : ARRAY[1..GVL_Param.cGantryAxisCount] OF AXIS_REF;     // X / Y / Z
+END_VAR
+VAR
+    aSimAxis : ARRAY[1..GVL_Param.cGantryAxisCount] OF FB_SimAxis;
+    aTargetMm : ARRAY[1..GVL_Param.cGantryAxisCount] OF LREAL;    // 本步目標 (mm)
+    fPickXMm : LREAL;               // 取料點 X (mm)
+    fPickYMm : LREAL;               // 取料點 Y (mm)
+    fPlaceXMm : LREAL;              // 放料點 X (mm)
+    fPlaceYMm : LREAL;              // 放料點 Y (mm)
+    fbGripTimer : TON;
+    bAxesHalt : BOOL;
+    i : INT;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[SUPER^();
+fbGripTimer(IN := (nStep = 30) OR (nStep = 70), PT := GVL_Param.cGripTime);
+// 奇數步 Execute = TRUE；偶數步先設目標、Execute = FALSE，產生下一個上升沿
+bAxesPowered := TRUE;
+bAxisError := FALSE;
+FOR i := 1 TO GVL_Param.cGantryAxisCount DO
+    aSimAxis[i](bPower := bPowerEnable,
+        bExecute := (eState = E_StationState.Busy) AND ((nStep MOD 2) = 1),
+        bHalt := bAxesHalt, bReset := bResetCmd, fTargetMm := aTargetMm[i],
+        fVelocityMmS := GVL_Param.cGantryVelocityMmS, fAccMmS2 := GVL_Param.cGantryAccMmS2,
+        stAxis := aAxis[i]);
+    bAxesPowered := bAxesPowered AND aSimAxis[i].bPowered;
+    bAxisError := bAxisError OR aSimAxis[i].bError;
+END_FOR
+fAxis1Mm := aSimAxis[GVL_Param.cAxisX].fActPosMm;
+fAxis2Mm := aSimAxis[GVL_Param.cAxisY].fActPosMm;
+fAxis3Mm := aSimAxis[GVL_Param.cAxisZ].fActPosMm;]]></ST>
+    </Implementation>
+    <Method Name="M_Sequence" Id="{956f4ca6-350c-4ce5-b093-35693432f616}">
+      <Declaration><![CDATA[METHOD PROTECTED M_Sequence]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF bAxisError THEN
+    bSeqError := TRUE;
+    FOR i := 1 TO GVL_Param.cGantryAxisCount DO
+        IF aSimAxis[i].bError THEN
+            nSeqErrorId := aSimAxis[i].nErrorId;
+        END_IF
+    END_FOR
+    RETURN;
+END_IF
+CASE nStep OF
+10:
+    bAxesHalt := FALSE;
+    M_SetTarget(fXMm := fPickXMm, fYMm := fPickYMm, fZMm := GVL_Param.cGantryZUpMm);
+    nStep := 11;
+11:
+    IF M_AxesDone() THEN nStep := 20; END_IF
+20:
+    M_SetTarget(fXMm := fPickXMm, fYMm := fPickYMm, fZMm := GVL_Param.cGantryZDownMm);
+    nStep := 21;
+21:
+    IF M_AxesDone() THEN nStep := 30; END_IF
+30:
+    bGripClosed := TRUE;
+    IF fbGripTimer.Q THEN nStep := 40; END_IF
+40:
+    M_SetTarget(fXMm := fPickXMm, fYMm := fPickYMm, fZMm := GVL_Param.cGantryZUpMm);
+    nStep := 41;
+41:
+    IF M_AxesDone() THEN nStep := 50; END_IF
+50:
+    M_SetTarget(fXMm := fPlaceXMm, fYMm := fPlaceYMm, fZMm := GVL_Param.cGantryZUpMm);
+    nStep := 51;
+51:
+    IF M_AxesDone() THEN nStep := 60; END_IF
+60:
+    M_SetTarget(fXMm := fPlaceXMm, fYMm := fPlaceYMm, fZMm := GVL_Param.cGantryZDownMm);
+    nStep := 61;
+61:
+    IF M_AxesDone() THEN nStep := 70; END_IF
+70:
+    bGripClosed := FALSE;
+    IF fbGripTimer.Q THEN nStep := 80; END_IF
+80:
+    M_SetTarget(fXMm := fPlaceXMm, fYMm := fPlaceYMm, fZMm := GVL_Param.cGantryZUpMm);
+    nStep := 81;
+81:
+    IF M_AxesDone() THEN bSeqDone := TRUE; END_IF
+ELSE
+    bSeqError := TRUE;
+    nSeqErrorId := GVL_ErrorId.cErrInvalidState;
+END_CASE]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_Abort" Id="{22fabc45-6c22-4eb3-9a86-d06ac431e239}">
+      <Declaration><![CDATA[METHOD PROTECTED M_Abort]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bAxesHalt := TRUE;      // 夾爪狀態保留，工件可能還在夾爪上]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_SetTarget" Id="{4552c96b-a4b7-465e-b389-9467c4996fa5}">
+      <Declaration><![CDATA[METHOD PRIVATE M_SetTarget
+VAR_INPUT
+    fXMm : LREAL;
+    fYMm : LREAL;
+    fZMm : LREAL;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[aTargetMm[GVL_Param.cAxisX] := fXMm;
+aTargetMm[GVL_Param.cAxisY] := fYMm;
+aTargetMm[GVL_Param.cAxisZ] := fZMm;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_AxesDone" Id="{fa0745fc-4978-4d34-a355-f8510d86b399}">
+      <Declaration><![CDATA[METHOD PRIVATE M_AxesDone : BOOL
+VAR
+    k : INT;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_AxesDone := TRUE;
+FOR k := 1 TO GVL_Param.cGantryAxisCount DO
+    M_AxesDone := M_AxesDone AND aSimAxis[k].bDone;
+END_FOR]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

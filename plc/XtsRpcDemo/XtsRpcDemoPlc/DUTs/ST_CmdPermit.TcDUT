@@ -1,0 +1,12 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_CmdPermit" Id="{b7d1a372-7bd0-4633-8f84-f720e69ccf09}">
+    <Declaration><![CDATA[// 命令允許條件，FB_XTS_Control 每 cycle 寫給子 FB
+TYPE ST_CmdPermit :
+STRUCT
+    bReady : BOOL;          // XTS 可控 (M_InitialXTS 完成且沒掉出)
+    eMode : E_XtsMode;      // Manual / Auto
+END_STRUCT
+END_TYPE]]></Declaration>
+  </DUT>
+</TcPlcObject>

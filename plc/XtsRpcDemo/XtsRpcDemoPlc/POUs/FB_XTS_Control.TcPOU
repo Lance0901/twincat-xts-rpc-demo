@@ -1,0 +1,686 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_XTS_Control" Id="{5d51e5e9-2587-4e57-b96b-61e53b41cb1f}" SpecialFunc="None">
+    <Declaration><![CDATA[// 整線總控：初始化 (Find mover 1 → 送電 → CA group)、模式、自動循環 Load → Press → Unload、派 mover 到站。
+// 擁有 4 個 FB_Mover 與 3 個站；每 cycle 把 ST_CmdPermit 寫給子 FB，所有命令檢查只走 F_CheckCmdAllowed。
+FUNCTION_BLOCK FB_XTS_Control
+VAR_IN_OUT
+    aMoverAxis : ARRAY[1..GVL_Param.cMoverCount] OF AXIS_REF;          // XTS mover NC 軸
+    stGroup : Tc3_McCoordinatedMotion.AXES_GROUP_REF;                   // CA group
+    aLoadAxis : ARRAY[1..GVL_Param.cGantryAxisCount] OF AXIS_REF;      // Load 站 XYZ
+    aUnloadAxis : ARRAY[1..GVL_Param.cGantryAxisCount] OF AXIS_REF;    // Unload 站 XYZ
+    stPressAxis : AXIS_REF;                                             // Press 站下壓軸
+END_VAR
+VAR_OUTPUT
+    bReady : BOOL;                  // 可控
+    eMode : E_XtsMode;
+    eInitStep : E_InitStep;
+    eCycleState : E_CycleState;
+    bError : BOOL;
+    nErrorId : UDINT;
+END_VAR
+VAR
+    aMover : ARRAY[1..GVL_Param.cMoverCount] OF FB_Mover;
+    fbLoad : FB_StationLoad;
+    fbPress : FB_StationPress;
+    fbUnload : FB_StationUnload;
+    aStationPtr : ARRAY[1..GVL_Param.cStationCount] OF POINTER TO FB_Station;   // 每 cycle 重取
+    fbEnvironment : Tc3_XTS_Utility.FB_TcIoXtsEnvironment;
+    stEnvConfig : Tc3_XTS_Utility.ST_XtsEnvironmentConfiguration;
+    fbGroup : FB_CaGroup;
+    fbInitTimer : TON;
+    fbResetTimer : TON;
+    stPermit : ST_CmdPermit;
+    stStatus : ST_LineStatus;       // M_GetStatus 回傳的快照
+    sInitMsg : STRING;              // 初始化進度或失敗原因
+    sCycleMsg : STRING;             // 自動循環訊息
+    bEnvInitialized : BOOL;
+    bPowerOn : BOOL;
+    bGroupEnable : BOOL;
+    bInitReset : BOOL;
+    eInitStepLast : E_InitStep;
+    bReqInit : BOOL;                // method 設，body 取走
+    bReqStop : BOOL;
+    bReqSetMode : BOOL;
+    eReqMode : E_XtsMode;
+    bReqStartCycle : BOOL;
+    nReqCycleMover : INT;
+    bStopPulse : BOOL;              // 本 cycle 對站送 abort
+    nCycleMover : INT;
+    nCycleStation : INT;
+    bCycleMoveIssued : BOOL;
+    nCycleCount : UDINT;
+    tCycleStart : TIME;
+    aStationDoneMs : ARRAY[1..GVL_Param.cStationCount] OF UDINT;
+    aLastDoneCount : ARRAY[1..GVL_Param.cStationCount] OF UDINT;
+    aMoverAtStation : ARRAY[1..GVL_Param.cStationCount] OF INT;
+    pStation : POINTER TO FB_Station;
+    bAllPowered : BOOL;
+    bAnyMoverError : BOOL;
+    bInitBusy : BOOL;
+    fDistMm : LREAL;
+    i : INT;
+    j : INT;
+    nStation : INT;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// 1. 站指標每 cycle 重取 (PTR-03)
+aStationPtr[GVL_Param.cStationLoad] := ADR(fbLoad);
+aStationPtr[GVL_Param.cStationPress] := ADR(fbPress);
+aStationPtr[GVL_Param.cStationUnload] := ADR(fbUnload);
+
+// 2. 取走 method 設的命令
+bStopPulse := FALSE;
+IF bReqStop THEN
+    bReqStop := FALSE;
+    bStopPulse := TRUE;
+    FOR i := 1 TO GVL_Param.cMoverCount DO
+        aMover[i].M_Stop();
+    END_FOR
+    IF (eCycleState = E_CycleState.ToStation) OR (eCycleState = E_CycleState.InStation) THEN
+        eCycleState := E_CycleState.Stopped;
+        sCycleMsg := 'Stopped by M_Stop';
+    END_IF
+END_IF
+IF bReqSetMode THEN
+    bReqSetMode := FALSE;
+    eMode := eReqMode;
+END_IF
+IF bReqInit THEN
+    bReqInit := FALSE;
+    bError := FALSE;
+    nErrorId := 0;
+    sInitMsg := 'Reset';
+    eInitStep := E_InitStep.Reset;
+END_IF
+
+// 3. 初始化：Find mover 1 → 送電 → CA group
+bInitBusy := M_InitBusy();
+fbInitTimer(IN := bInitBusy AND (eInitStep = eInitStepLast), PT := GVL_Param.cInitStepTimeout);
+eInitStepLast := eInitStep;
+fbResetTimer(IN := (eInitStep = E_InitStep.Reset), PT := GVL_Param.cResetTime);
+CASE eInitStep OF
+E_InitStep.Idle, E_InitStep.Ready, E_InitStep.Error:
+    ;
+E_InitStep.Reset:
+    bInitReset := TRUE;
+    bPowerOn := FALSE;
+    bGroupEnable := FALSE;
+    IF fbResetTimer.Q THEN
+        bInitReset := FALSE;
+        IF bEnvInitialized THEN
+            eInitStep := E_InitStep.WaitMovers;
+        ELSE
+            stEnvConfig.bEnableInitInfoServer := TRUE;
+            stEnvConfig.bEnableInitCaGroup := TRUE;
+            fbEnvironment.P_XtsEnvironmentConfiguration := stEnvConfig;
+            eInitStep := E_InitStep.InitEnvironment;
+        END_IF
+        sInitMsg := F_InitStepName(eInitStep);
+    END_IF
+E_InitStep.InitEnvironment:
+    // Init 是非同步的，回 TRUE 才算做完
+    IF fbEnvironment.Init(TRUE) THEN
+        fbEnvironment.Init(FALSE);
+        IF fbEnvironment.P_IsInitialized THEN
+            bEnvInitialized := TRUE;
+            eInitStep := E_InitStep.WaitMovers;
+            sInitMsg := F_InitStepName(eInitStep);
+        ELSE
+            M_SetInitError(nId := GVL_ErrorId.cErrEnvInit, sText := 'Tc3_XTS_Utility Init failed');
+        END_IF
+    END_IF
+E_InitStep.WaitMovers:
+    IF (fbEnvironment.XpuTcIo(1).GetDetectedMoverCount() = INT_TO_UDINT(GVL_Param.cMoverCount))
+        AND fbEnvironment.XpuTcIo(1).GetAreAllPositionsValid() THEN
+        eInitStep := E_InitStep.FindMover1;
+        sInitMsg := F_InitStepName(eInitStep);
+    END_IF
+E_InitStep.FindMover1:
+    // IdDetectionMode = Standard 時 XTS 不做 Mover ID detection，mover 編號照設定順序
+    IF fbEnvironment.XpuTcIo(1).GetMoverIdDetectionMode() = MoverIdDetectionMode.Mover1 THEN
+        IF fbEnvironment.XpuTcIo(1).TriggerMoverIdDetection() THEN
+            eInitStep := E_InitStep.FindMover1Wait;
+            sInitMsg := 'FindMover1: detection triggered';
+        ELSE
+            M_SetInitError(nId := GVL_ErrorId.cErrIdDetection, sText := 'TriggerMoverIdDetection rejected');
+        END_IF
+    ELSE
+        eInitStep := E_InitStep.PowerOn;
+        sInitMsg := 'FindMover1 skipped (IdDetectionMode = Standard), PowerOn';
+    END_IF
+E_InitStep.FindMover1Wait:
+    IF fbEnvironment.XpuTcIo(1).GetHasMoverIdDetectionError() THEN
+        M_SetInitError(nId := GVL_ErrorId.cErrIdDetection, sText := 'Mover ID detection error');
+    ELSIF fbEnvironment.XpuTcIo(1).GetIsMoverIdDetectionValid() THEN
+        eInitStep := E_InitStep.PowerOn;
+        sInitMsg := F_InitStepName(eInitStep);
+    END_IF
+E_InitStep.PowerOn:
+    bPowerOn := TRUE;
+    IF bAllPowered AND fbLoad.bAxesPowered AND fbPress.bAxesPowered AND fbUnload.bAxesPowered THEN
+        eInitStep := E_InitStep.EnableGroup;
+        sInitMsg := F_InitStepName(eInitStep);
+    END_IF
+E_InitStep.EnableGroup:
+    bGroupEnable := TRUE;
+    IF fbGroup.bError THEN
+        M_SetInitError(nId := fbGroup.nErrorId, sText := 'CA group error');
+    ELSIF fbGroup.bReady THEN
+        eInitStep := E_InitStep.Ready;
+        sInitMsg := 'Ready';
+    END_IF
+ELSE
+    M_SetInitError(nId := GVL_ErrorId.cErrInvalidState, sText := 'invalid init step');
+END_CASE
+IF fbInitTimer.Q THEN
+    M_SetInitError(nId := GVL_ErrorId.cErrInitTimeout, sText := 'step timeout');
+END_IF
+
+// 4. 可控監視：任何 mover error、失電、group 失效、站上軸 error 都掉出 ready
+bAllPowered := TRUE;
+bAnyMoverError := FALSE;
+FOR i := 1 TO GVL_Param.cMoverCount DO
+    bAllPowered := bAllPowered AND aMover[i].bPowered;
+    bAnyMoverError := bAnyMoverError OR aMover[i].bError;
+END_FOR
+IF eInitStep = E_InitStep.Ready THEN
+    IF bAnyMoverError THEN
+        M_SetInitError(nId := GVL_ErrorId.cErrLostReady, sText := 'mover error');
+    ELSIF NOT bAllPowered THEN
+        M_SetInitError(nId := GVL_ErrorId.cErrLostReady, sText := 'mover power lost');
+    ELSIF NOT fbGroup.bReady THEN
+        M_SetInitError(nId := GVL_ErrorId.cErrLostReady, sText := 'CA group not ready');
+    ELSIF fbLoad.bAxisError OR fbPress.bAxisError OR fbUnload.bAxisError THEN
+        M_SetInitError(nId := GVL_ErrorId.cErrLostReady, sText := 'station axis error');
+    END_IF
+END_IF
+bReady := (eInitStep = E_InitStep.Ready);
+stPermit.bReady := bReady;
+stPermit.eMode := eMode;
+
+// 5. 哪個 mover 停在哪一站 (停止且在容差內)
+FOR nStation := 1 TO GVL_Param.cStationCount DO
+    aMoverAtStation[nStation] := 0;
+    FOR i := 1 TO GVL_Param.cMoverCount DO
+        fDistMm := F_RingPosition(fPositionMm := aMover[i].fPositionMm - GVL_Param.cStationPosMm[nStation]
+            + GVL_Param.cTrackLengthMm / 2.0, fLengthMm := GVL_Param.cTrackLengthMm) - GVL_Param.cTrackLengthMm / 2.0;
+        IF NOT aMover[i].bBusy AND (ABS(fDistMm) <= GVL_Param.cAtStationTolMm) THEN
+            aMoverAtStation[nStation] := i;
+        END_IF
+    END_FOR
+    pStation := aStationPtr[nStation];
+    IF pStation <> 0 THEN
+        pStation^.nMoverAtStation := aMoverAtStation[nStation];
+        j := aMoverAtStation[nStation];
+        IF j > 0 THEN
+            pStation^.bMoverHasPart := aMover[j].bHasPart;
+            pStation^.bMoverPressed := aMover[j].bPressed;
+        ELSE
+            pStation^.bMoverHasPart := FALSE;
+            pStation^.bMoverPressed := FALSE;
+        END_IF
+    END_IF
+END_FOR
+
+// 6. 站完成 → 更新 mover 工件狀態 (手動與自動都走這裡)
+FOR nStation := 1 TO GVL_Param.cStationCount DO
+    pStation := aStationPtr[nStation];
+    IF pStation <> 0 THEN
+        IF pStation^.nDoneCount <> aLastDoneCount[nStation] THEN
+            aLastDoneCount[nStation] := pStation^.nDoneCount;
+            j := pStation^.nMover;
+            IF (j >= 1) AND (j <= GVL_Param.cMoverCount) THEN
+                CASE nStation OF
+                GVL_Param.cStationLoad:
+                    aMover[j].M_SetPart(bPart := TRUE, bPress := FALSE);
+                GVL_Param.cStationPress:
+                    aMover[j].M_SetPart(bPart := aMover[j].bHasPart, bPress := TRUE);
+                GVL_Param.cStationUnload:
+                    aMover[j].M_SetPart(bPart := FALSE, bPress := FALSE);
+                END_CASE
+            END_IF
+        END_IF
+    END_IF
+END_FOR
+
+// 7. 自動循環：mover 依序到 Load → Press → Unload
+IF NOT bReady AND ((eCycleState = E_CycleState.ToStation) OR (eCycleState = E_CycleState.InStation)) THEN
+    eCycleState := E_CycleState.Error;
+    sCycleMsg := 'Lost ready during cycle';
+END_IF
+pStation := 0;
+IF (nCycleStation >= 1) AND (nCycleStation <= GVL_Param.cStationCount) THEN
+    pStation := aStationPtr[nCycleStation];
+END_IF
+CASE eCycleState OF
+E_CycleState.Idle, E_CycleState.Done, E_CycleState.Stopped, E_CycleState.Error:
+    IF bReqStartCycle THEN
+        nCycleMover := nReqCycleMover;
+        nCycleStation := GVL_Param.cStationLoad;
+        bCycleMoveIssued := FALSE;
+        tCycleStart := TIME();
+        FOR nStation := 1 TO GVL_Param.cStationCount DO
+            aStationDoneMs[nStation] := 0;
+        END_FOR
+        sCycleMsg := 'Cycle started';
+        eCycleState := E_CycleState.ToStation;
+    END_IF
+E_CycleState.ToStation:
+    IF pStation = 0 THEN
+        eCycleState := E_CycleState.Error;
+        sCycleMsg := 'Invalid station index';
+    ELSIF NOT bCycleMoveIssued THEN
+        bCycleMoveIssued := aMover[nCycleMover].M_RequestMove(fPosition := GVL_Param.cStationPosMm[nCycleStation],
+            fVelocity := GVL_Param.cDefaultVelocityMmS, sMsg => sCycleMsg);
+    ELSIF aMover[nCycleMover].bDone AND (aMoverAtStation[nCycleStation] = nCycleMover) THEN
+        IF pStation^.M_RequestStart(sMsg => sCycleMsg) THEN
+            eCycleState := E_CycleState.InStation;
+        ELSE
+            eCycleState := E_CycleState.Error;
+        END_IF
+    END_IF
+E_CycleState.InStation:
+    IF pStation = 0 THEN
+        eCycleState := E_CycleState.Error;
+        sCycleMsg := 'Invalid station index';
+    ELSIF pStation^.eState = E_StationState.Error THEN
+        eCycleState := E_CycleState.Error;
+        sCycleMsg := 'Station error';
+    ELSIF pStation^.eState = E_StationState.Done THEN
+        aStationDoneMs[nCycleStation] := TIME_TO_UDINT(TIME() - tCycleStart);
+        pStation^.M_RequestRelease(sMsg => sCycleMsg);
+        IF nCycleStation < GVL_Param.cStationCount THEN
+            nCycleStation := nCycleStation + 1;
+            bCycleMoveIssued := FALSE;
+            eCycleState := E_CycleState.ToStation;
+        ELSE
+            nCycleCount := nCycleCount + 1;
+            sCycleMsg := 'Cycle done';
+            eCycleState := E_CycleState.Done;
+        END_IF
+    END_IF
+ELSE
+    eCycleState := E_CycleState.Error;
+    sCycleMsg := 'Invalid cycle state';
+END_CASE
+bReqStartCycle := FALSE;
+
+// 8. 呼叫子 FB (每 cycle 無條件)
+FOR i := 1 TO GVL_Param.cMoverCount DO
+    aMover[i](nIndex := i, stPermit := stPermit, bPowerEnable := bPowerOn, bResetCmd := bInitReset,
+        stAxis := aMoverAxis[i]);
+END_FOR
+fbGroup(Group := stGroup, Axes := aMoverAxis, bEnable := bGroupEnable, bReset := bInitReset);
+fbLoad(nIndex := GVL_Param.cStationLoad, stPermit := stPermit, bPowerEnable := bPowerOn,
+    bResetCmd := bInitReset, bAbort := bStopPulse, aAxis := aLoadAxis);
+fbPress(nIndex := GVL_Param.cStationPress, stPermit := stPermit, bPowerEnable := bPowerOn,
+    bResetCmd := bInitReset, bAbort := bStopPulse, stAxis := stPressAxis);
+fbUnload(nIndex := GVL_Param.cStationUnload, stPermit := stPermit, bPowerEnable := bPowerOn,
+    bResetCmd := bInitReset, bAbort := bStopPulse, aAxis := aUnloadAxis);
+
+// 9. 狀態快照
+stStatus.bReady := bReady;
+stStatus.eMode := eMode;
+stStatus.eInitStep := eInitStep;
+stStatus.bError := bError;
+stStatus.nErrorId := nErrorId;
+stStatus.eCycleState := eCycleState;
+stStatus.nCycleMover := nCycleMover;
+stStatus.nCycleStation := nCycleStation;
+stStatus.nCycleCount := nCycleCount;
+FOR i := 1 TO GVL_Param.cMoverCount DO
+    stStatus.aMover[i].fPositionMm := aMover[i].fPositionMm;
+    stStatus.aMover[i].fVelocityMmS := aMover[i].fVelocityMmS;
+    stStatus.aMover[i].bPowered := aMover[i].bPowered;
+    stStatus.aMover[i].bBusy := aMover[i].bBusy;
+    stStatus.aMover[i].bDone := aMover[i].bDone;
+    stStatus.aMover[i].bError := aMover[i].bError;
+    stStatus.aMover[i].nErrorId := aMover[i].nErrorId;
+    stStatus.aMover[i].bHasPart := aMover[i].bHasPart;
+    stStatus.aMover[i].bPressed := aMover[i].bPressed;
+    stStatus.aMover[i].nStation := 0;
+END_FOR
+FOR nStation := 1 TO GVL_Param.cStationCount DO
+    stStatus.aStationDoneMs[nStation] := aStationDoneMs[nStation];
+    j := aMoverAtStation[nStation];
+    IF (j >= 1) AND (j <= GVL_Param.cMoverCount) THEN
+        stStatus.aMover[j].nStation := nStation;
+    END_IF
+    pStation := aStationPtr[nStation];
+    IF pStation <> 0 THEN
+        stStatus.aStation[nStation] := pStation^.M_GetStatusStruct();
+    END_IF
+END_FOR]]></ST>
+    </Implementation>
+    <Method Name="M_GetMover" Id="{50e2134a-08ed-4511-9c8e-d89495ba40e5}">
+      <Declaration><![CDATA[// 內部用：給 MAIN 的 REFERENCE 備案路徑。超出範圍回 mover 1。
+METHOD PUBLIC M_GetMover : REFERENCE TO FB_Mover
+VAR_INPUT
+    nMover : INT;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_GetMover REF= aMover[LIMIT(1, nMover, GVL_Param.cMoverCount)];]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_GetStatus" Id="{da8ade63-314b-44f6-8b9e-da96d7e4e18b}">
+      <Declaration><![CDATA[// RPC：整線快照 (mover、站、XYZ / 下壓軸位置、循環)，隨時可讀
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_GetStatus : BOOL
+VAR_OUTPUT
+    stLine : ST_LineStatus;
+    sCycle : STRING;            // 自動循環訊息
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[stLine := stStatus;
+sCycle := sCycleMsg;
+M_GetStatus := TRUE;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_InitBusy" Id="{46f481da-2d1c-4acc-8e67-fff5aa74d8fc}">
+      <Declaration><![CDATA[METHOD PRIVATE M_InitBusy : BOOL]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_InitBusy := (eInitStep = E_InitStep.Reset) OR (eInitStep = E_InitStep.InitEnvironment)
+    OR (eInitStep = E_InitStep.WaitMovers) OR (eInitStep = E_InitStep.FindMover1)
+    OR (eInitStep = E_InitStep.FindMover1Wait) OR (eInitStep = E_InitStep.PowerOn)
+    OR (eInitStep = E_InitStep.EnableGroup);]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_InitialXTS" Id="{08d03753-3c59-4bd6-920b-f2a712191ffa}">
+      <Declaration><![CDATA[// RPC：開始初始化 (Reset → Find mover 1 → PowerOn → EnableGroup)。回 TRUE = 已接受，用 M_ReadXTS_Status 看進度。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_InitialXTS : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_InitialXTS := FALSE;
+IF bReqInit THEN
+    sMsg := 'Previous command not yet taken by PLC, retry';
+ELSIF M_InitBusy() THEN
+    sMsg := CONCAT('Init already running: ', F_InitStepName(eInitStep));
+ELSIF (eCycleState = E_CycleState.ToStation) OR (eCycleState = E_CycleState.InStation) THEN
+    sMsg := 'Cycle running, call M_Stop first';
+ELSIF bReady THEN
+    sMsg := 'Already ready';
+ELSE
+    bReqInit := TRUE;
+    sMsg := 'Init started';
+    M_InitialXTS := TRUE;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_MoveTo" Id="{5b2ba3c1-10d7-4605-a2d0-86892e6c4e21}">
+      <Declaration><![CDATA[// RPC：總控層的 mover 移動 (陣列元素路徑不能用時的備案)。需 ready + Manual。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_MoveTo : BOOL
+VAR_INPUT
+    nMover : UINT;              // 1..cMoverCount
+    fPosition : LREAL;          // 目標環上位置 (mm)
+    fVelocity : LREAL;          // 速度 (mm/s)
+END_VAR
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_MoveTo := FALSE;
+IF NOT F_CheckCmdAllowed(stPermit := stPermit, bNeedManual := TRUE, bNeedAuto := FALSE, sMsg => sMsg) THEN
+    RETURN;
+END_IF
+IF (nMover < 1) OR (nMover > INT_TO_UINT(GVL_Param.cMoverCount)) THEN
+    sMsg := CONCAT('nMover out of range 1..', INT_TO_STRING(GVL_Param.cMoverCount));
+    RETURN;
+END_IF
+M_MoveTo := aMover[UINT_TO_INT(nMover)].M_RequestMove(fPosition := fPosition, fVelocity := fVelocity, sMsg => sMsg);]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_ReadXTS_Status" Id="{2f3d7c89-5971-44da-ad54-254a5c5ae4e6}">
+      <Declaration><![CDATA[// RPC：可控閘門狀態，隨時可讀
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_ReadXTS_Status : BOOL
+VAR_OUTPUT
+    bIsReady : BOOL;            // TRUE 才能下站與 mover 命令
+    eStep : E_InitStep;         // 初始化目前步驟
+    sStepMsg : STRING;          // 進度或失敗原因
+    bIsError : BOOL;
+    nErrId : UDINT;
+    eModeNow : E_XtsMode;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bIsReady := bReady;
+eStep := eInitStep;
+sStepMsg := sInitMsg;
+bIsError := bError;
+nErrId := nErrorId;
+eModeNow := eMode;
+M_ReadXTS_Status := TRUE;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_ReleaseStation" Id="{6ac6d762-11f3-4737-9166-836ba996a762}">
+      <Declaration><![CDATA[// RPC：總控層的手動放行 (備案路徑)。需 ready + Manual。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_ReleaseStation : BOOL
+VAR_INPUT
+    nStation : UINT;            // 1 = Load, 2 = Press, 3 = Unload
+END_VAR
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR
+VAR
+    pSt : POINTER TO FB_Station;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_ReleaseStation := FALSE;
+IF NOT F_CheckCmdAllowed(stPermit := stPermit, bNeedManual := TRUE, bNeedAuto := FALSE, sMsg => sMsg) THEN
+    RETURN;
+END_IF
+IF (nStation < 1) OR (nStation > INT_TO_UINT(GVL_Param.cStationCount)) THEN
+    sMsg := CONCAT('nStation out of range 1..', INT_TO_STRING(GVL_Param.cStationCount));
+    RETURN;
+END_IF
+pSt := aStationPtr[UINT_TO_INT(nStation)];
+IF pSt = 0 THEN
+    sMsg := 'Station not ready yet, retry';
+    RETURN;
+END_IF
+M_ReleaseStation := pSt^.M_RequestRelease(sMsg => sMsg);]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_SendToStation" Id="{a0b987a6-38c1-4518-87e2-680a4062779a}">
+      <Declaration><![CDATA[// RPC：把 mover 送到指定站。需 ready + Manual、站號有效、站沒被其他 mover 佔用。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_SendToStation : BOOL
+VAR_INPUT
+    nMover : UINT;              // 1..cMoverCount
+    nStation : UINT;            // 1 = Load, 2 = Press, 3 = Unload
+END_VAR
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR
+VAR
+    nMv : INT;
+    nSt : INT;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_SendToStation := FALSE;
+IF NOT F_CheckCmdAllowed(stPermit := stPermit, bNeedManual := TRUE, bNeedAuto := FALSE, sMsg => sMsg) THEN
+    RETURN;
+END_IF
+IF (nMover < 1) OR (nMover > INT_TO_UINT(GVL_Param.cMoverCount)) THEN
+    sMsg := CONCAT('nMover out of range 1..', INT_TO_STRING(GVL_Param.cMoverCount));
+    RETURN;
+END_IF
+IF (nStation < 1) OR (nStation > INT_TO_UINT(GVL_Param.cStationCount)) THEN
+    sMsg := CONCAT('nStation out of range 1..', INT_TO_STRING(GVL_Param.cStationCount));
+    RETURN;
+END_IF
+nMv := UINT_TO_INT(nMover);       // 已檢查範圍，不會溢位
+nSt := UINT_TO_INT(nStation);
+IF (aMoverAtStation[nSt] <> 0) AND (aMoverAtStation[nSt] <> nMv) THEN
+    sMsg := CONCAT(CONCAT('Station occupied by mover ', INT_TO_STRING(aMoverAtStation[nSt])), ', move it away first');
+    RETURN;
+END_IF
+M_SendToStation := aMover[nMv].M_RequestMove(fPosition := GVL_Param.cStationPosMm[nSt],
+    fVelocity := GVL_Param.cDefaultVelocityMmS, sMsg => sMsg);]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_SetInitError" Id="{20f872fa-0149-4ddb-a5d4-6daaa23ca560}">
+      <Declaration><![CDATA[METHOD PRIVATE M_SetInitError
+VAR_INPUT
+    nId : UDINT;
+    sText : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[sInitMsg := CONCAT(CONCAT(F_InitStepName(eInitStep), ': '), sText);
+bError := TRUE;
+nErrorId := nId;
+IF nErrorId = 0 THEN
+    nErrorId := GVL_ErrorId.cErrInvalidState;
+END_IF
+eInitStep := E_InitStep.Error;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_SetMode" Id="{0e6000a9-ee11-4a0d-8c3a-dda5ea77eba6}">
+      <Declaration><![CDATA[// RPC：切換模式 0 = Manual、1 = Auto。自動循環中拒絕。不受 ready 限制。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_SetMode : BOOL
+VAR_INPUT
+    nMode : INT;                // 0 = Manual, 1 = Auto
+END_VAR
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_SetMode := FALSE;
+IF (eCycleState = E_CycleState.ToStation) OR (eCycleState = E_CycleState.InStation) THEN
+    sMsg := 'Cycle running, call M_Stop first';
+ELSIF nMode = 0 THEN
+    eReqMode := E_XtsMode.Manual;
+    bReqSetMode := TRUE;
+    sMsg := 'Mode -> Manual';
+    M_SetMode := TRUE;
+ELSIF nMode = 1 THEN
+    eReqMode := E_XtsMode.Auto;
+    bReqSetMode := TRUE;
+    sMsg := 'Mode -> Auto';
+    M_SetMode := TRUE;
+ELSE
+    sMsg := 'nMode must be 0 (Manual) or 1 (Auto)';
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_StartCycle" Id="{35ca7495-b013-4a7f-804c-0a4f03798805}">
+      <Declaration><![CDATA[// RPC：nMover 跑一輪 Load → Press → Unload。需 ready + Auto、三站 Idle、mover 沒工件、路徑上沒有其他 mover。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_StartCycle : BOOL
+VAR_INPUT
+    nMover : UINT;              // 1..cMoverCount
+END_VAR
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR
+VAR
+    nMv : INT;
+    nOther : INT;
+    fPathMm : LREAL;            // 到 Unload 的路徑長 + CA 間距 (mm)
+    fAheadMm : LREAL;           // 其他 mover 在前方多遠 (mm)
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_StartCycle := FALSE;
+IF NOT F_CheckCmdAllowed(stPermit := stPermit, bNeedManual := FALSE, bNeedAuto := TRUE, sMsg => sMsg) THEN
+    RETURN;
+END_IF
+IF bReqStartCycle THEN
+    sMsg := 'Previous command not yet taken by PLC, retry';
+    RETURN;
+END_IF
+IF (eCycleState = E_CycleState.ToStation) OR (eCycleState = E_CycleState.InStation) THEN
+    sMsg := 'Cycle already running';
+    RETURN;
+END_IF
+IF (nMover < 1) OR (nMover > INT_TO_UINT(GVL_Param.cMoverCount)) THEN
+    sMsg := CONCAT('nMover out of range 1..', INT_TO_STRING(GVL_Param.cMoverCount));
+    RETURN;
+END_IF
+nMv := UINT_TO_INT(nMover);       // 已檢查範圍，不會溢位
+IF aMover[nMv].bHasPart THEN
+    sMsg := 'Mover already has a part, unload it first';
+    RETURN;
+END_IF
+IF aMover[nMv].bBusy OR aMover[nMv].bError THEN
+    sMsg := 'Mover busy or in error';
+    RETURN;
+END_IF
+IF (fbLoad.eState <> E_StationState.Idle) OR (fbPress.eState <> E_StationState.Idle)
+    OR (fbUnload.eState <> E_StationState.Idle) THEN
+    sMsg := 'All stations must be Idle';
+    RETURN;
+END_IF
+// CA 會讓 mover 排在前車後面，路徑上有車就到不了站
+fPathMm := F_RingPosition(fPositionMm := GVL_Param.cStationPosMm[GVL_Param.cStationUnload] - aMover[nMv].fPositionMm,
+    fLengthMm := GVL_Param.cTrackLengthMm) + GVL_Param.cCaGapMm;
+FOR nOther := 1 TO GVL_Param.cMoverCount DO
+    IF nOther <> nMv THEN
+        fAheadMm := F_RingPosition(fPositionMm := aMover[nOther].fPositionMm - aMover[nMv].fPositionMm,
+            fLengthMm := GVL_Param.cTrackLengthMm);
+        IF fAheadMm < fPathMm THEN
+            sMsg := CONCAT(CONCAT('Mover ', INT_TO_STRING(nOther)), ' is in the path, move it away in Manual first');
+            RETURN;
+        END_IF
+    END_IF
+END_FOR
+nReqCycleMover := nMv;
+bReqStartCycle := TRUE;
+sMsg := 'Cycle accepted';
+M_StartCycle := TRUE;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_StartStation" Id="{6a65ed80-469a-4f1d-85d8-837c42eb899d}">
+      <Declaration><![CDATA[// RPC：總控層的手動站啟動 (子類別上繼承來的 RPC 不能用時的備案)。需 ready + Manual。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_StartStation : BOOL
+VAR_INPUT
+    nStation : UINT;            // 1 = Load, 2 = Press, 3 = Unload
+END_VAR
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR
+VAR
+    pSt : POINTER TO FB_Station;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_StartStation := FALSE;
+IF NOT F_CheckCmdAllowed(stPermit := stPermit, bNeedManual := TRUE, bNeedAuto := FALSE, sMsg => sMsg) THEN
+    RETURN;
+END_IF
+IF (nStation < 1) OR (nStation > INT_TO_UINT(GVL_Param.cStationCount)) THEN
+    sMsg := CONCAT('nStation out of range 1..', INT_TO_STRING(GVL_Param.cStationCount));
+    RETURN;
+END_IF
+pSt := aStationPtr[UINT_TO_INT(nStation)];
+IF pSt = 0 THEN
+    sMsg := 'Station not ready yet, retry';
+    RETURN;
+END_IF
+M_StartStation := pSt^.M_RequestStart(sMsg => sMsg);]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_Stop" Id="{cd8fce48-cf08-484d-860a-572165f4aa98}">
+      <Declaration><![CDATA[// RPC：停止所有 mover、中止站動作與自動循環。不受 ready / 模式限制，永遠接受。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_Stop : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bReqStop := TRUE;
+IF bReady THEN
+    sMsg := 'Stop accepted';
+ELSE
+    sMsg := 'Stop accepted (XTS not ready, movers may be unpowered)';
+END_IF
+M_Stop := TRUE;]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

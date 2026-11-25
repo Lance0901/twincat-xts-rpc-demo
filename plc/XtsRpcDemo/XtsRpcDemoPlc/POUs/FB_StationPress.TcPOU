@@ -1,0 +1,81 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_StationPress" Id="{3057a555-b570-4d72-8dda-d46c0cb096c3}" SpecialFunc="None">
+    <Declaration><![CDATA[// 第 2 站 Press：下壓軸下降 → 保壓 → 上升。mover 必須有工件且還沒下壓。
+// 步驟：10 下降 → 20 保壓 → 30 上升
+FUNCTION_BLOCK FB_StationPress EXTENDS FB_Station
+VAR_IN_OUT
+    stAxis : AXIS_REF;              // 下壓軸 (Z)
+END_VAR
+VAR
+    fbPressAxis : FB_SimAxis;
+    fTargetMm : LREAL;              // 本步目標 (mm)
+    fbHoldTimer : TON;
+    bAxisHalt : BOOL;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[SUPER^();
+fbHoldTimer(IN := (nStep = 20), PT := GVL_Param.cPressHoldTime);
+fbPressAxis(bPower := bPowerEnable,
+    bExecute := (eState = E_StationState.Busy) AND ((nStep MOD 2) = 1),
+    bHalt := bAxisHalt, bReset := bResetCmd, fTargetMm := fTargetMm,
+    fVelocityMmS := GVL_Param.cGantryVelocityMmS, fAccMmS2 := GVL_Param.cGantryAccMmS2,
+    stAxis := stAxis);
+bAxesPowered := fbPressAxis.bPowered;
+bAxisError := fbPressAxis.bError;
+fAxis3Mm := fbPressAxis.fActPosMm;]]></ST>
+    </Implementation>
+    <Method Name="M_CheckStart" Id="{461e1180-6c96-44de-8701-f40e7c053493}">
+      <Declaration><![CDATA[METHOD PROTECTED M_CheckStart : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF NOT bMoverHasPart THEN
+    sMsg := 'Mover has no part to press';
+    M_CheckStart := FALSE;
+ELSIF bMoverPressed THEN
+    sMsg := 'Part already pressed';
+    M_CheckStart := FALSE;
+ELSE
+    sMsg := '';
+    M_CheckStart := TRUE;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_Sequence" Id="{eb54b5b4-d2dc-4209-bc71-e9ba511ee511}">
+      <Declaration><![CDATA[METHOD PROTECTED M_Sequence]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF bAxisError THEN
+    bSeqError := TRUE;
+    nSeqErrorId := fbPressAxis.nErrorId;
+    RETURN;
+END_IF
+CASE nStep OF
+10:
+    bAxisHalt := FALSE;
+    fTargetMm := GVL_Param.cPressZDownMm;
+    nStep := 11;
+11:
+    IF fbPressAxis.bDone THEN nStep := 20; END_IF
+20:
+    IF fbHoldTimer.Q THEN nStep := 30; END_IF
+30:
+    fTargetMm := GVL_Param.cGantryZUpMm;
+    nStep := 31;
+31:
+    IF fbPressAxis.bDone THEN bSeqDone := TRUE; END_IF
+ELSE
+    bSeqError := TRUE;
+    nSeqErrorId := GVL_ErrorId.cErrInvalidState;
+END_CASE]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_Abort" Id="{eb42a1bf-8d1a-4a5b-b879-f42b51b9d11f}">
+      <Declaration><![CDATA[METHOD PROTECTED M_Abort]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bAxisHalt := TRUE;]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

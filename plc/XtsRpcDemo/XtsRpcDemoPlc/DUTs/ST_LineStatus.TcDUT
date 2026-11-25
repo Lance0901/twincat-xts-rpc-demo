@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_LineStatus" Id="{980df33d-e3a1-406b-a0b2-6c05038ead7b}">
+    <Declaration><![CDATA[// FB_XTS_Control.M_GetStatus 的輸出，C# 端對應 LineStatus (Pack = 1)
+{attribute 'pack_mode' := '1'}
+TYPE ST_LineStatus :
+STRUCT
+    bReady : BOOL;
+    eMode : E_XtsMode;
+    eInitStep : E_InitStep;
+    bError : BOOL;
+    nErrorId : UDINT;
+    eCycleState : E_CycleState;
+    nCycleMover : INT;              // 自動循環中的 mover，0 = 無
+    nCycleStation : INT;            // 自動循環目前的站
+    nCycleCount : UDINT;            // 完成的循環數
+    aStationDoneMs : ARRAY[1..GVL_Param.cStationCount] OF UDINT;   // 本輪各站完成時間 (ms, PLC TIME, 從 M_StartCycle 起算)
+    aMover : ARRAY[1..GVL_Param.cMoverCount] OF ST_MoverStatus;
+    aStation : ARRAY[1..GVL_Param.cStationCount] OF ST_StationStatus;
+END_STRUCT
+END_TYPE]]></Declaration>
+  </DUT>
+</TcPlcObject>

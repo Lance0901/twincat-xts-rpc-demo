@@ -1,0 +1,18 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <GVL Name="GVL_ErrorId" Id="{e7ef3d28-1b4f-469e-a9fc-d8cc0ef91370}">
+    <Declaration><![CDATA[// 應用程式錯誤碼；MC / NC 的錯誤碼照原值傳出
+{attribute 'qualified_only'}
+VAR_GLOBAL CONSTANT
+    cErrInvalidState : UDINT := 16#E001;        // 狀態機進到未定義狀態
+    cErrMoveTimeout : UDINT := 16#E101;         // mover 移動逾時
+    cErrStationTimeout : UDINT := 16#E201;      // 站內步驟逾時
+    cErrInitTimeout : UDINT := 16#E301;         // 初始化步驟逾時
+    cErrEnvInit : UDINT := 16#E302;             // Utility 環境 Init 失敗
+    cErrIdDetection : UDINT := 16#E303;         // Mover ID detection 失敗
+    cErrGroup : UDINT := 16#E304;               // CA group enable 失敗
+    cErrLostReady : UDINT := 16#E310;           // 執行中掉出可控
+    cErrCycle : UDINT := 16#E401;               // 自動循環失敗
+END_VAR]]></Declaration>
+  </GVL>
+</TcPlcObject>

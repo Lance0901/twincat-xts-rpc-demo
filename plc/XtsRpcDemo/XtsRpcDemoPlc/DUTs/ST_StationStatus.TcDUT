@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_StationStatus" Id="{65a42387-9d70-4b76-8d3f-e1a137b086bc}">
+    <Declaration><![CDATA[// C# 端對應 StationStatus (Pack = 1)
+{attribute 'pack_mode' := '1'}
+TYPE ST_StationStatus :
+STRUCT
+    eState : E_StationState;
+    nStep : INT;            // 站內步驟，見 README
+    bOccupied : BOOL;       // 站內有 mover 或站在動作
+    nMover : INT;           // 處理中的 mover，0 = 無
+    bError : BOOL;
+    nErrorId : UDINT;
+    nDoneCount : UDINT;     // 完成次數
+    fAxis1Mm : LREAL;       // X (mm)；下壓站不用
+    fAxis2Mm : LREAL;       // Y (mm)；下壓站不用
+    fAxis3Mm : LREAL;       // Z (mm)，往下為正
+    bGripClosed : BOOL;     // 夾爪閉合；下壓站固定 FALSE
+END_STRUCT
+END_TYPE]]></Declaration>
+  </DUT>
+</TcPlcObject>

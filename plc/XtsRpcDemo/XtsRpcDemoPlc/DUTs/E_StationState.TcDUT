@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="E_StationState" Id="{718d7faf-b20a-4d6f-8999-cb645b91a96c}">
+    <Declaration><![CDATA[{attribute 'qualified_only'}
+{attribute 'strict'}
+TYPE E_StationState :
+(
+    Idle := 0,
+    Busy := 10,     // 站動作中，nStep 為目前步驟
+    Done := 20,     // 動作完成，等放行 (M_Release)
+    Error := 900
+) INT;
+END_TYPE]]></Declaration>
+  </DUT>
+</TcPlcObject>

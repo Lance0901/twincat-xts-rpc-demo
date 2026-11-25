@@ -1,0 +1,275 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_Station" Id="{07d1a367-9f07-42eb-8832-0c3c9ab98f3b}" SpecialFunc="None">
+    <Declaration><![CDATA[// 站的共用底層：站狀態、占用、放行、步驟逾時。動作步驟由子類別覆寫 M_Sequence。
+// 前置：FB_XTS_Control 每 cycle 寫入 stPermit、nMoverAtStation、bMoverHasPart、bMoverPressed 並呼叫。
+FUNCTION_BLOCK FB_Station
+VAR_INPUT
+    nIndex : INT;                   // 站號 1..cStationCount
+    stPermit : ST_CmdPermit;        // 總控每 cycle 寫入
+    nMoverAtStation : INT;          // 停在站上的 mover，0 = 無
+    bMoverHasPart : BOOL;           // 站上 mover 有工件
+    bMoverPressed : BOOL;           // 站上 mover 已下壓
+    bPowerEnable : BOOL;            // 站上軸送電
+    bResetCmd : BOOL;               // 總控初始化時的 reset
+    bAbort : BOOL;                  // 總控 Stop：中止動作、停軸
+END_VAR
+VAR_OUTPUT
+    eState : E_StationState;
+    nStep : INT;                    // 站內步驟，0 = 不在動作
+    bOccupied : BOOL;               // 站內有 mover 或站在動作
+    nMover : INT;                   // 處理中的 mover，0 = 無
+    bBusy : BOOL;
+    bDone : BOOL;
+    bError : BOOL;
+    nErrorId : UDINT;
+    nDoneCount : UDINT;             // 完成次數
+    bAxesPowered : BOOL;            // 站上軸全部送電
+    bAxisError : BOOL;              // 站上軸 error，總控會因此掉出 ready
+    fAxis1Mm : LREAL;               // X (mm)
+    fAxis2Mm : LREAL;               // Y (mm)
+    fAxis3Mm : LREAL;               // Z (mm)，往下為正
+    bGripClosed : BOOL;             // 夾爪閉合
+END_VAR
+VAR
+    bReqStart : BOOL;               // method 設，body 取走
+    bReqRelease : BOOL;
+    bReqReset : BOOL;
+    fbStepTimer : TON;
+    nStepLast : INT;
+    bSeqDone : BOOL;                // M_Sequence 回報
+    bSeqError : BOOL;
+    nSeqErrorId : UDINT;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[fbStepTimer(IN := (eState = E_StationState.Busy) AND (nStep = nStepLast), PT := GVL_Param.cStationStepTimeout);
+nStepLast := nStep;
+
+IF bResetCmd OR bReqReset THEN
+    bReqReset := FALSE;
+    IF eState = E_StationState.Busy THEN
+        M_Abort();
+    END_IF
+    IF eState <> E_StationState.Done THEN
+        eState := E_StationState.Idle;
+        nStep := 0;
+        nMover := 0;
+    END_IF
+    nErrorId := 0;
+END_IF
+IF bAbort AND (eState = E_StationState.Busy) THEN
+    M_Abort();
+    eState := E_StationState.Idle;
+    nStep := 0;
+    nMover := 0;
+END_IF
+
+CASE eState OF
+E_StationState.Idle:
+    IF bReqStart THEN
+        nMover := nMoverAtStation;
+        nStep := 10;
+        eState := E_StationState.Busy;
+    END_IF
+E_StationState.Busy:
+    bSeqDone := FALSE;
+    bSeqError := FALSE;
+    M_Sequence();
+    IF bSeqError THEN
+        nErrorId := nSeqErrorId;
+        eState := E_StationState.Error;
+    ELSIF bSeqDone THEN
+        nDoneCount := nDoneCount + 1;
+        nStep := 0;
+        eState := E_StationState.Done;
+    ELSIF fbStepTimer.Q THEN
+        M_Abort();
+        nErrorId := GVL_ErrorId.cErrStationTimeout;
+        eState := E_StationState.Error;
+    END_IF
+E_StationState.Done:
+    IF bReqRelease THEN
+        nMover := 0;
+        eState := E_StationState.Idle;
+    END_IF
+E_StationState.Error:
+    ;
+ELSE
+    nErrorId := GVL_ErrorId.cErrInvalidState;
+    eState := E_StationState.Error;
+END_CASE
+// 沒在對應狀態被取走的請求直接丟掉
+bReqStart := FALSE;
+bReqRelease := FALSE;
+
+bBusy := (eState = E_StationState.Busy);
+bDone := (eState = E_StationState.Done);
+bError := (eState = E_StationState.Error);
+bOccupied := (nMoverAtStation <> 0) OR (eState <> E_StationState.Idle);]]></ST>
+    </Implementation>
+    <Method Name="M_Start" Id="{40a4b2eb-a504-4a58-b4c1-498049b537fc}">
+      <Declaration><![CDATA[// RPC：手動跑一次站動作。需 ready + Manual、站 Idle、站上有 mover。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_Start : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF NOT F_CheckCmdAllowed(stPermit := stPermit, bNeedManual := TRUE, bNeedAuto := FALSE, sMsg => sMsg) THEN
+    M_Start := FALSE;
+    RETURN;
+END_IF
+M_Start := M_RequestStart(sMsg => sMsg);]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_RequestStart" Id="{8525994f-32c1-4caf-b8f5-e864e9ed2aba}">
+      <Declaration><![CDATA[// 內部用 (總控自動循環與 M_Start 共用)：檢查站狀態後設啟動命令，不檢查模式
+METHOD PUBLIC M_RequestStart : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_RequestStart := FALSE;
+IF bReqStart THEN
+    sMsg := 'Previous command not yet taken by PLC, retry';
+ELSIF eState <> E_StationState.Idle THEN
+    sMsg := 'Station not idle (busy, waiting release or error)';
+ELSIF nMoverAtStation = 0 THEN
+    sMsg := 'No mover at station';
+ELSIF M_CheckStart(sMsg => sMsg) THEN
+    bReqStart := TRUE;
+    sMsg := 'Accepted';
+    M_RequestStart := TRUE;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_Release" Id="{14d19f66-9d14-41f2-8859-c247c4372ffd}">
+      <Declaration><![CDATA[// RPC：放行 (Done -> Idle)。需 ready + Manual。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_Release : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF NOT F_CheckCmdAllowed(stPermit := stPermit, bNeedManual := TRUE, bNeedAuto := FALSE, sMsg => sMsg) THEN
+    M_Release := FALSE;
+    RETURN;
+END_IF
+M_Release := M_RequestRelease(sMsg => sMsg);]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_RequestRelease" Id="{1d503084-0f0c-4b1f-bcc7-ebd6f174484b}">
+      <Declaration><![CDATA[// 內部用：站在 Done 才放行
+METHOD PUBLIC M_RequestRelease : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF eState = E_StationState.Done THEN
+    bReqRelease := TRUE;
+    sMsg := 'Accepted';
+    M_RequestRelease := TRUE;
+ELSE
+    sMsg := 'Station not in Done, nothing to release';
+    M_RequestRelease := FALSE;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_Reset" Id="{ee92eec6-4ac1-4262-9b17-9870da532af1}">
+      <Declaration><![CDATA[// RPC：清站的 Error 回 Idle (站上軸 MC_Reset 走 M_InitialXTS)。需 ready + Manual。
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_Reset : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF NOT F_CheckCmdAllowed(stPermit := stPermit, bNeedManual := TRUE, bNeedAuto := FALSE, sMsg => sMsg) THEN
+    M_Reset := FALSE;
+    RETURN;
+END_IF
+bReqReset := TRUE;
+sMsg := 'Reset accepted';
+M_Reset := TRUE;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_GetStatus" Id="{154a61e8-f59d-49c6-9dfa-f1d12f100a6f}">
+      <Declaration><![CDATA[// RPC：讀狀態，隨時可讀
+{attribute 'TcRpcEnable'}
+METHOD PUBLIC M_GetStatus : BOOL
+VAR_OUTPUT
+    nState : INT;           // E_StationState 值
+    nStepNow : INT;
+    bOccupiedNow : BOOL;
+    nMoverNow : INT;
+    bErrorNow : BOOL;
+    nErrorIdNow : UDINT;
+    nDone : UDINT;
+    fAxisX : LREAL;         // (mm)
+    fAxisY : LREAL;         // (mm)
+    fAxisZ : LREAL;         // (mm)
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[CASE eState OF
+E_StationState.Idle:  nState := 0;
+E_StationState.Busy:  nState := 10;
+E_StationState.Done:  nState := 20;
+E_StationState.Error: nState := 900;
+ELSE
+    nState := -1;
+END_CASE
+nStepNow := nStep;
+bOccupiedNow := bOccupied;
+nMoverNow := nMover;
+bErrorNow := bError;
+nErrorIdNow := nErrorId;
+nDone := nDoneCount;
+fAxisX := fAxis1Mm;
+fAxisY := fAxis2Mm;
+fAxisZ := fAxis3Mm;
+M_GetStatus := TRUE;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_GetStatusStruct" Id="{b3399aaf-249a-4e6d-9f9f-495e675399e5}">
+      <Declaration><![CDATA[// 內部用：給總控組 ST_LineStatus
+METHOD PUBLIC M_GetStatusStruct : ST_StationStatus]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[M_GetStatusStruct.eState := eState;
+M_GetStatusStruct.nStep := nStep;
+M_GetStatusStruct.bOccupied := bOccupied;
+M_GetStatusStruct.nMover := nMover;
+M_GetStatusStruct.bError := bError;
+M_GetStatusStruct.nErrorId := nErrorId;
+M_GetStatusStruct.nDoneCount := nDoneCount;
+M_GetStatusStruct.fAxis1Mm := fAxis1Mm;
+M_GetStatusStruct.fAxis2Mm := fAxis2Mm;
+M_GetStatusStruct.fAxis3Mm := fAxis3Mm;
+M_GetStatusStruct.bGripClosed := bGripClosed;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_CheckStart" Id="{17156052-4c14-4a64-9796-15c7f330039e}">
+      <Declaration><![CDATA[// 子類別覆寫：檢查站上 mover 的工件狀態可否開始
+METHOD PROTECTED M_CheckStart : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[sMsg := '';
+M_CheckStart := TRUE;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_Sequence" Id="{6c35c085-bfdf-4945-85ce-7af9b755006d}">
+      <Declaration><![CDATA[// 子類別覆寫：每 cycle 推進一步，完成設 bSeqDone，失敗設 bSeqError / nSeqErrorId
+METHOD PROTECTED M_Sequence]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bSeqDone := TRUE;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="M_Abort" Id="{fdeb5453-78ac-4d5b-b098-b923261fb83a}">
+      <Declaration><![CDATA[// 子類別覆寫：中止時停軸
+METHOD PROTECTED M_Abort]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[;]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>
