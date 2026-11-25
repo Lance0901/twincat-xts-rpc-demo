@@ -42,6 +42,12 @@ internal sealed class Options
     /// <summary>輪詢間隔 (ms)。</summary>
     public int PollMs { get; private set; } = 500;
 
+    /// <summary>PLC 回「上一個命令還沒被收下」時的重送間隔 (ms)。</summary>
+    public int RetryMs { get; private set; } = 200;
+
+    /// <summary>重送的總時間上限 (ms，牆鐘)；到了仍沒被收下就當失敗回報。0 = 不重試。</summary>
+    public int RetryTimeoutMs { get; private set; } = 5000;
+
     public AmsNetId AmsNetId => NetId is null ? AmsNetId.Local : new AmsNetId(NetId);
 
     public string MoverPath(int mover) => string.Format(MoverPathTemplate, mover);
@@ -72,6 +78,8 @@ internal sealed class Options
                 case "--init-timeout": o.InitTimeoutSec = int.Parse(Next()); break;
                 case "--step-timeout": o.StepTimeoutSec = int.Parse(Next()); break;
                 case "--poll-ms": o.PollMs = int.Parse(Next()); break;
+                case "--retry-ms": o.RetryMs = int.Parse(Next()); break;
+                case "--retry-timeout-ms": o.RetryTimeoutMs = int.Parse(Next()); break;
                 case "-h":
                 case "--help":
                     PrintHelp();
@@ -81,6 +89,8 @@ internal sealed class Options
                     throw new ArgumentException($"未知參數 {args[i]}，用 --help 看說明");
             }
         }
+        if (o.RetryMs <= 0) throw new ArgumentException("--retry-ms 必須 > 0");
+        if (o.RetryTimeoutMs < 0) throw new ArgumentException("--retry-timeout-ms 必須 >= 0");
         return o;
     }
 
@@ -89,7 +99,7 @@ internal sealed class Options
         Console.WriteLine("""
             XtsRpcClient — 用 InvokeRpcMethod 控制 XTS 模擬 (TwinCAT PLC {attribute 'TcRpcEnable'} method)
 
-              --netid <AmsNetId>         預設 AmsNetId.Local (本機 UmRT)
+              --netid <AmsNetId>         預設 AmsNetId.Local；連 UmRT 要給 UmRT 的 AmsNetId (否則 ADS error 6)
               --port <n>                 預設 851
               --control-path <path>      預設 MAIN.fbXts
               --mover-path <template>    預設 MAIN.fbXts.aMover[{0}]；備案 MAIN.refMover{0}
@@ -99,6 +109,8 @@ internal sealed class Options
               --init-timeout <s>         預設 900 (UmRT 比實際慢，放寬)
               --step-timeout <s>         預設 900
               --poll-ms <ms>             預設 500
+              --retry-ms <ms>            PLC 回「上一個命令還沒被收下」時的重送間隔，預設 200
+              --retry-timeout-ms <ms>    重送總上限，預設 5000；0 = 不重試
             """);
     }
 }

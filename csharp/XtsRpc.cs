@@ -8,6 +8,17 @@ internal sealed record RpcResult(object? ReturnValue, object[] Outputs)
 {
     public bool Ok => ReturnValue is bool b && b;
 
+    /// <summary>實際送出的次數 (1 = 沒重試)。</summary>
+    public int Attempts { get; init; } = 1;
+
+    /// <summary>重試到上限，PLC 仍未收下上一個命令。</summary>
+    public bool NotTakenTimeout { get; init; }
+
+    /// <summary>重試狀況的一行說明；沒重試時是空字串。</summary>
+    public string RetryNote => NotTakenTimeout
+        ? $"重試 {Attempts - 1} 次後放棄：PLC 在逾時內一直沒收下上一個命令"
+        : Attempts > 1 ? $"重試 {Attempts - 1} 次後收下" : "";
+
     /// <summary>第 index 個 VAR_OUTPUT (順序 = PLC 宣告順序)。</summary>
     public T Out<T>(int index) => (T)Convert.ChangeType(Outputs[index], typeof(T));
 
@@ -29,33 +40,68 @@ internal sealed class XtsRpc
         _opt = opt;
     }
 
+    /// <summary>重試時每次呼叫一行訊息 (console 印出、web 寫 log)；null = 不印。</summary>
+    public Action<string>? Log { get; set; }
+
+    /// <summary>單次呼叫，不重試。狀態讀取用這個。</summary>
     public RpcResult Call(string path, string method, params object[] args)
     {
         object? ret = _client.InvokeRpcMethod(path, method, args, out object[]? outs);
         return new RpcResult(ret, outs ?? Array.Empty<object>());
     }
 
+    /// <summary>
+    /// 命令呼叫 (Outputs[0] = sMsg)：PLC 回「上一個命令還沒被收下」時每 RetryMs 重送一次，
+    /// 總時間上限 RetryTimeoutMs。其他拒絕 (未 ready、Auto 模式、參數錯) 不重試，照原樣回傳。
+    /// </summary>
+    public RpcResult Command(string path, string method, params object[] args)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int attempts = 1;
+        var r = Call(path, method, args);
+        while (PlcReject.IsNotTaken(r))
+        {
+            if (sw.ElapsedMilliseconds + _opt.RetryMs > _opt.RetryTimeoutMs)
+            {
+                Log?.Invoke($"   {method}: {attempts} 次都回 \"{r.Msg(0)}\"，已達 {_opt.RetryTimeoutMs} ms 上限，放棄");
+                return r with { Attempts = attempts, NotTakenTimeout = true };
+            }
+            Thread.Sleep(_opt.RetryMs);
+            attempts++;
+            r = Call(path, method, args);
+            Log?.Invoke($"   {method}: 第 {attempts} 次 ({sw.ElapsedMilliseconds} ms) -> {r.Ok}，sMsg = \"{r.Msg(0)}\"");
+        }
+        return r with { Attempts = attempts };
+    }
+
     // ---------- 總控 MAIN.fbXts ----------
 
-    public RpcResult InitialXts() => Call(_opt.ControlPath, "M_InitialXTS");
+    public RpcResult InitialXts() => Command(_opt.ControlPath, "M_InitialXTS");
 
-    /// <summary>輸出：bIsReady, eStep, sStepMsg, bIsError, nErrId, eModeNow</summary>
+    /// <summary>
+    /// 輸出：bIsReady, eStep, sStepMsg, bIsError, nErrId, eModeNow,
+    /// nFindMover1Ms, bFindMover1Detected, nPowerOnMs, nGroupMs (後 4 個是各步完成時間；舊版 PLC 沒有就是 null)
+    /// </summary>
     public XtsReadyStatus ReadXtsStatus()
     {
         var r = Call(_opt.ControlPath, "M_ReadXTS_Status");
+        InitTrace? trace = r.Outputs.Length >= 10
+            ? new InitTrace(Convert.ToUInt32(r.Outputs[6]), r.Out<bool>(7),
+                Convert.ToUInt32(r.Outputs[8]), Convert.ToUInt32(r.Outputs[9]))
+            : null;
         return new XtsReadyStatus(
             r.Out<bool>(0), Convert.ToInt32(r.Outputs[1]), r.Msg(2),
-            r.Out<bool>(3), Convert.ToUInt32(r.Outputs[4]), Convert.ToInt32(r.Outputs[5]));
+            r.Out<bool>(3), Convert.ToUInt32(r.Outputs[4]), Convert.ToInt32(r.Outputs[5]), trace);
     }
 
-    public RpcResult SetMode(short mode) => Call(_opt.ControlPath, "M_SetMode", mode);
+    public RpcResult SetMode(short mode) => Command(_opt.ControlPath, "M_SetMode", mode);
 
-    public RpcResult StartCycle(int mover) => Call(_opt.ControlPath, "M_StartCycle", (ushort)mover);
+    public RpcResult StartCycle(int mover) => Command(_opt.ControlPath, "M_StartCycle", (ushort)mover);
 
-    public RpcResult StopAll() => Call(_opt.ControlPath, "M_Stop");
+    public RpcResult StopAll() => Command(_opt.ControlPath, "M_Stop");
 
     public RpcResult SendToStation(int mover, int station) =>
-        Call(_opt.ControlPath, "M_SendToStation", (ushort)mover, (ushort)station);
+        Command(_opt.ControlPath, "M_SendToStation", (ushort)mover, (ushort)station);
 
     /// <summary>輸出：stLine (byte[]，Pack = 1), sCycle</summary>
     public (LineStatus Line, string CycleMsg) GetLineStatus()
@@ -72,12 +118,12 @@ internal sealed class XtsRpc
     // ---------- 單一 mover ----------
 
     public RpcResult MoverMoveTo(int mover, double position, double velocity) => _opt.MoverViaControl
-        ? Call(_opt.ControlPath, "M_MoveTo", (ushort)mover, position, velocity)
-        : Call(_opt.MoverPath(mover), "M_MoveTo", position, velocity);
+        ? Command(_opt.ControlPath, "M_MoveTo", (ushort)mover, position, velocity)
+        : Command(_opt.MoverPath(mover), "M_MoveTo", position, velocity);
 
-    public RpcResult MoverStop(int mover) => Call(_opt.MoverPath(mover), "M_Stop");
+    public RpcResult MoverStop(int mover) => Command(_opt.MoverPath(mover), "M_Stop");
 
-    public RpcResult MoverReset(int mover) => Call(_opt.MoverPath(mover), "M_Reset");
+    public RpcResult MoverReset(int mover) => Command(_opt.MoverPath(mover), "M_Reset");
 
     /// <summary>輸出：fPosition, fVelocity, bBusy, bError, nErrorId, bHasPart, bPressed, bPowered</summary>
     public RpcResult MoverGetStatus(int mover) => Call(_opt.MoverPath(mover), "M_GetStatus");
@@ -85,20 +131,45 @@ internal sealed class XtsRpc
     // ---------- 單站 ----------
 
     public RpcResult StationStart(int station) => _opt.StationViaControl
-        ? Call(_opt.ControlPath, "M_StartStation", (ushort)station)
-        : Call(_opt.StationPath(station), "M_Start");
+        ? Command(_opt.ControlPath, "M_StartStation", (ushort)station)
+        : Command(_opt.StationPath(station), "M_Start");
 
     public RpcResult StationRelease(int station) => _opt.StationViaControl
-        ? Call(_opt.ControlPath, "M_ReleaseStation", (ushort)station)
-        : Call(_opt.StationPath(station), "M_Release");
+        ? Command(_opt.ControlPath, "M_ReleaseStation", (ushort)station)
+        : Command(_opt.StationPath(station), "M_Release");
 
-    public RpcResult StationReset(int station) => Call(_opt.StationPath(station), "M_Reset");
+    public RpcResult StationReset(int station) => Command(_opt.StationPath(station), "M_Reset");
 
     /// <summary>輸出：nState, nStepNow, bOccupiedNow, nMoverNow, bErrorNow, nErrorIdNow, nDone, fAxisX, fAxisY, fAxisZ</summary>
     public RpcResult StationGetStatus(int station) => Call(_opt.StationPath(station), "M_GetStatus");
 }
 
-internal sealed record XtsReadyStatus(bool Ready, int Step, string StepMsg, bool Error, uint ErrorId, int Mode);
+internal sealed record XtsReadyStatus(
+    bool Ready, int Step, string StepMsg, bool Error, uint ErrorId, int Mode, InitTrace? Trace);
+
+/// <summary>
+/// 初始化各步完成時間 (PLC ms，從 M_InitialXTS 被取走起算；0 = 這次初始化還沒完成該步)。
+/// 給輪詢抓不到的快步驟留證據。FindMover1Detected = FALSE 且 FindMover1Ms > 0 表示 IdDetectionMode 不是 Mover1、跳過。
+/// </summary>
+internal sealed record InitTrace(uint FindMover1Ms, bool FindMover1Detected, uint PowerOnMs, uint GroupMs)
+{
+    public override string ToString()
+    {
+        static string T(uint ms) => ms == 0 ? "未完成" : $"{ms / 1000.0:F2} s";
+        string find = FindMover1Ms == 0 ? "未完成" : $"{T(FindMover1Ms)} ({(FindMover1Detected ? "detection valid" : "skipped")})";
+        return $"FindMover1 {find}；PowerOn {T(PowerOnMs)}；EnableGroup {T(GroupMs)} (PLC 時間)";
+    }
+}
+
+/// <summary>PLC 拒絕原因的判斷集中在這裡。RPC method 只回 BOOL + sMsg，沒有結構化錯誤碼，只能比對字串。</summary>
+internal static class PlcReject
+{
+    /// <summary>FB_XTS_Control / FB_Mover / FB_Station 在上一個 bReq* 還沒被 body 取走時回的 sMsg 開頭。</summary>
+    public const string NotTakenPrefix = "Previous command not yet taken by PLC";
+
+    public static bool IsNotTaken(RpcResult r) =>
+        !r.Ok && r.Outputs.Length > 0 && r.Msg(0).StartsWith(NotTakenPrefix, StringComparison.Ordinal);
+}
 
 internal sealed record MoverStatus(
     double PositionMm, double VelocityMmS, bool Powered, bool Busy, bool Done, bool Error,

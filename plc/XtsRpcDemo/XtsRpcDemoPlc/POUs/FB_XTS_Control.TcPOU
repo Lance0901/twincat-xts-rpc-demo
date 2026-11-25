@@ -39,6 +39,11 @@ VAR
     bGroupEnable : BOOL;
     bInitReset : BOOL;
     eInitStepLast : E_InitStep;
+    tInitStart : TIME;              // M_InitialXTS 被取走的時刻
+    nFindMover1Ms : UDINT;          // 各步完成時間 (ms，從 tInitStart 起算；0 = 這次還沒完成)
+    bFindMover1Detected : BOOL;     // TRUE = detection valid；FALSE 且 nFindMover1Ms > 0 = 跳過
+    nPowerOnMs : UDINT;
+    nGroupMs : UDINT;
     bReqInit : BOOL;                // method 設，body 取走
     bReqStop : BOOL;
     bReqSetMode : BOOL;
@@ -92,6 +97,11 @@ IF bReqInit THEN
     nErrorId := 0;
     sInitMsg := 'Reset';
     eInitStep := E_InitStep.Reset;
+    tInitStart := TIME();
+    nFindMover1Ms := 0;
+    bFindMover1Detected := FALSE;
+    nPowerOnMs := 0;
+    nGroupMs := 0;
 END_IF
 
 // 3. 初始化：Find mover 1 → 送電 → CA group
@@ -149,6 +159,7 @@ E_InitStep.FindMover1:
         // 防呆：XPU 被改回 Standard 時不做 detection，mover 編號照設定順序
         eInitStep := E_InitStep.PowerOn;
         sInitMsg := 'FindMover1 skipped: XPU IdDetectionMode is not Mover1, PowerOn';
+        nFindMover1Ms := MAX(TIME_TO_UDINT(TIME() - tInitStart), 1);
     END_IF
 E_InitStep.FindMover1Wait:
     IF fbEnvironment.XpuTcIo(1).GetHasMoverIdDetectionError() THEN
@@ -156,12 +167,15 @@ E_InitStep.FindMover1Wait:
     ELSIF fbEnvironment.XpuTcIo(1).GetIsMoverIdDetectionValid() THEN
         eInitStep := E_InitStep.PowerOn;
         sInitMsg := 'FindMover1 done (Mover ID detection valid), PowerOn';
+        nFindMover1Ms := MAX(TIME_TO_UDINT(TIME() - tInitStart), 1);
+        bFindMover1Detected := TRUE;
     END_IF
 E_InitStep.PowerOn:
     bPowerOn := TRUE;
     IF bAllPowered AND fbLoad.bAxesPowered AND fbPress.bAxesPowered AND fbUnload.bAxesPowered THEN
         eInitStep := E_InitStep.EnableGroup;
         sInitMsg := F_InitStepName(eInitStep);
+        nPowerOnMs := MAX(TIME_TO_UDINT(TIME() - tInitStart), 1);
     END_IF
 E_InitStep.EnableGroup:
     bGroupEnable := TRUE;
@@ -170,6 +184,7 @@ E_InitStep.EnableGroup:
     ELSIF fbGroup.bReady THEN
         eInitStep := E_InitStep.Ready;
         sInitMsg := 'Ready';
+        nGroupMs := MAX(TIME_TO_UDINT(TIME() - tInitStart), 1);
     END_IF
 ELSE
     M_SetInitError(nId := GVL_ErrorId.cErrInvalidState, sText := 'invalid init step');
@@ -446,6 +461,10 @@ VAR_OUTPUT
     bIsError : BOOL;
     nErrId : UDINT;
     eModeNow : E_XtsMode;
+    nFindMover1DoneMs : UDINT;  // 各步完成時間 (PLC ms，從 M_InitialXTS 被取走起算；0 = 這次還沒完成)
+    bFindMover1Valid : BOOL;    // TRUE = Mover ID detection valid；FALSE 且時間 > 0 = IdDetectionMode 不是 Mover1、跳過
+    nPowerOnDoneMs : UDINT;
+    nGroupDoneMs : UDINT;
 END_VAR]]></Declaration>
       <Implementation>
         <ST><![CDATA[bIsReady := bReady;
@@ -454,6 +473,10 @@ sStepMsg := sInitMsg;
 bIsError := bError;
 nErrId := nErrorId;
 eModeNow := eMode;
+nFindMover1DoneMs := nFindMover1Ms;
+bFindMover1Valid := bFindMover1Detected;
+nPowerOnDoneMs := nPowerOnMs;
+nGroupDoneMs := nGroupMs;
 M_ReadXTS_Status := TRUE;]]></ST>
       </Implementation>
     </Method>

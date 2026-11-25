@@ -27,7 +27,7 @@ using var client = new AdsClient();
 client.Connect(opt.AmsNetId, opt.Port);
 var state = client.ReadState();
 Console.WriteLine($"連線 {opt.AmsNetId}:{opt.Port}，ADS state = {state.AdsState}");
-var xts = new XtsRpc(client, opt);
+var xts = new XtsRpc(client, opt) { Log = Console.WriteLine };
 
 try
 {
@@ -140,18 +140,29 @@ bool WaitReady(XtsRpc xts, Options opt)
             Console.WriteLine($"   [{sw.Elapsed:mm\\:ss}] step {s.Step}：{s.StepMsg}");
             lastStep = s.Step;
         }
-        if (s.Ready) return true;
+        if (s.Ready)
+        {
+            PrintInitTrace(s);
+            return true;
+        }
         if (s.Error)
         {
             Console.WriteLine($"   初始化失敗：nErrorId = 16#{s.ErrorId:X}，{s.StepMsg}");
+            PrintInitTrace(s);
             return false;
         }
         Thread.Sleep(opt.PollMs);
     }
     var last = xts.ReadXtsStatus();
     Console.WriteLine($"   逾時 {opt.InitTimeoutSec} s，最後 step {last.Step}：{last.StepMsg}");
+    PrintInitTrace(last);
     return false;
 }
+
+// 500 ms 輪詢抓不到太快的步驟，改看 PLC 記下的各步完成時間
+static void PrintInitTrace(XtsReadyStatus s) => Console.WriteLine(s.Trace is null
+    ? "   (PLC 版本沒有各步完成時間輸出)"
+    : $"   初始化各步完成：{s.Trace}");
 
 bool WaitMoverIdle(XtsRpc xts, Options opt, int mover)
 {
@@ -280,10 +291,18 @@ void PrintMover(XtsRpc xts, Options opt, int mover)
 
 static void Step(string title) => Console.WriteLine($"\n== {title}");
 
-static void PrintCmd(string name, RpcResult r) => Console.WriteLine($"   {name} -> {r.Ok}，sMsg = \"{r.Msg(0)}\"");
+static void PrintCmd(string name, RpcResult r)
+{
+    string note = r.RetryNote.Length > 0 ? $"  [{r.RetryNote}]" : "";
+    Console.WriteLine($"   {name} -> {r.Ok}，sMsg = \"{r.Msg(0)}\"{note}");
+}
 
 static bool Cmd(string name, RpcResult r)
 {
     PrintCmd(name, r);
+    if (r.NotTakenTimeout)
+    {
+        Console.WriteLine($"   {name} 失敗：PLC 一直沒取走上一個命令 (PLC task 卡住或太慢？UmRT 可試加大 --retry-timeout-ms)");
+    }
     return r.Ok;
 }

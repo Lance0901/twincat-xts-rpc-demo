@@ -4,8 +4,8 @@ using XtsRpcClient;
 
 namespace XtsWeb;
 
-/// <summary>命令結果：照 PLC 的 BOOL 回傳值與 sMsg。</summary>
-public sealed record CmdResult(bool Accepted, string SMsg);
+/// <summary>命令結果：照 PLC 的 BOOL 回傳值與 sMsg；Attempts = 送出次數 (PLC 還沒收下上一個命令時共用層會重試)。</summary>
+public sealed record CmdResult(bool Accepted, string SMsg, int Attempts);
 
 /// <summary>web 專用命令列參數 (其餘參數交給 XtsRpcClient.Options 與 ASP.NET Core)。</summary>
 internal sealed record WebOptions(bool DetailStatus);
@@ -35,7 +35,7 @@ internal sealed class PlcConnection : IDisposable
                 {
                     _client = new AdsClient();
                     _client.Connect(_opt.AmsNetId, _opt.Port);
-                    _rpc = new XtsRpc(_client, _opt);
+                    _rpc = new XtsRpc(_client, _opt) { Log = Console.WriteLine };
                 }
                 return action(_rpc);
             }
@@ -165,6 +165,11 @@ internal sealed class StatusPoller : BackgroundService
             source = "live", connected = true,
             ready = rd.Ready, mode = rd.Mode, initStep = rd.Step, initStepName = name, initMsg = rd.StepMsg,
             initError = rd.Error, initErrorId = rd.ErrorId,
+            initTrace = rd.Trace is null ? null : new
+            {
+                findMover1Ms = rd.Trace.FindMover1Ms, findMover1Detected = rd.Trace.FindMover1Detected,
+                powerOnMs = rd.Trace.PowerOnMs, groupMs = rd.Trace.GroupMs,
+            },
             cycleState = (int)line.CycleState, cycleMover = (int)line.CycleMover, cycleStation = (int)line.CycleStation,
             cycleCount = line.CycleCount, cycleMsg, stationDoneMs = line.StationDoneMs,
             movers, stations, detailWarnings = _detailWarnings,

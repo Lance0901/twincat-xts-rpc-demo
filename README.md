@@ -67,7 +67,7 @@ XTS 設定來自另一個已在 UmRT 上跑過 CA 繞線的示範專案，從 6 
 | Method | 輸入 | 輸出 | 條件 |
 |---|---|---|---|
 | `M_InitialXTS` | – | `sMsg` | 不在初始化中、沒在自動循環、尚未 ready |
-| `M_ReadXTS_Status` | – | `bIsReady, eStep : E_InitStep, sStepMsg, bIsError, nErrId : UDINT, eModeNow : E_XtsMode` | 隨時可讀 |
+| `M_ReadXTS_Status` | – | `bIsReady, eStep : E_InitStep, sStepMsg, bIsError, nErrId : UDINT, eModeNow : E_XtsMode, nFindMover1DoneMs : UDINT, bFindMover1Valid, nPowerOnDoneMs : UDINT, nGroupDoneMs : UDINT` | 隨時可讀 |
 | `M_GetStatus` | – | `stLine : ST_LineStatus, sCycle` | 隨時可讀；整線快照（4 mover、3 站、XYZ / 下壓軸位置、循環），給之後的網頁模擬器用 |
 | `M_SetMode` | `nMode : INT`（0 Manual / 1 Auto） | `sMsg` | 自動循環中拒絕；不受 ready 限制 |
 | `M_StartCycle` | `nMover : UINT` | `sMsg` | ready + **Auto**、三站 Idle、mover 沒工件、路徑上沒有別的 mover |
@@ -192,6 +192,7 @@ Ready 後掉出可控 ─► Error，需重新 M_InitialXTS
 - **防呆**：若 XPU 被改回 `Standard`，程式不做 detection、直接進 PowerOn，`sInitMsg` 寫 `FindMover1 skipped: XPU IdDetectionMode is not Mover1, PowerOn`，mover 編號照 XTS 設定順序（`MoverSortOrder = Descending`）。
 - **模擬模式下 Mover 1 detection 能不能完成：初判可以（XPU 的 `MoverIdStartUpSimulationMode` 會模擬 mover ID），待 runtime 驗證**；之前同一套模擬設定都用 `Standard`，沒跑過 detection。
 - `M_ReadXTS_Status` 的 `eStep`（`E_InitStep` 值）與 `sStepMsg` 看得到目前步驟與失敗原因。
+- **各步有沒有真的跑過**：輪詢間隔 500 ms，太快的步驟（例如 FindMover1Wait）可能整個被跳過、看不到。`M_ReadXTS_Status` 另外回傳 `nFindMover1DoneMs`、`nPowerOnDoneMs`、`nGroupDoneMs`：該步完成的 PLC 時間（ms，從 `M_InitialXTS` 被 body 取走起算；0 = 這次初始化還沒完成那一步），`bFindMover1Valid` = TRUE 表示 Mover ID detection valid，FALSE 但時間 > 0 表示 IdDetectionMode 不是 Mover1、跳過。每次 `M_InitialXTS` 被取走時歸零。console 在 ready、失敗或逾時時印一行 `初始化各步完成：FindMover1 x.xx s (detection valid)；PowerOn …；EnableGroup …`，網頁 Live 的狀態 JSON 放在 `initTrace`。時間是 PLC 時間，UmRT 上比牆鐘慢。
 - 初始化完成前，`M_StartCycle` 與所有 mover / 站命令都被 `F_CheckCmdAllowed` 擋下。
 
 ## 三站流程
@@ -244,7 +245,7 @@ Idle/Done ─M_StartCycle─► ToStation(Load) ─到站─► InStation(Load) 
 
 ```csharp
 using var client = new AdsClient();
-client.Connect(AmsNetId.Local, 851);   // 不寫死 AmsNetId；遠端用 --netid
+client.Connect(AmsNetId.Local, 851);   // 本機 XAR；UmRT / 遠端要用該目標的 AmsNetId (--netid)
 
 // 對單一 mover：輸入參數照 PLC 型別給 (LREAL = double, UINT = ushort)
 object? ok = client.InvokeRpcMethod("MAIN.fbXts.aMover[2]", "M_MoveTo",
@@ -286,10 +287,14 @@ client.InvokeRpcMethod("MAIN.fbXts.fbPress", "M_Start", Array.Empty<object>(), o
 3. 跑 C#：
 
    ```
-   dotnet run --project csharp
-   dotnet run --project csharp -- --netid <AmsNetId> --port 851
-   dotnet run --project csharp -- --mover-path "MAIN.refMover{0}"
+   dotnet run --project csharp -- --netid <UmRT 的 AmsNetId>
+   dotnet run --project csharp -- --netid <AmsNetId> --port 851 --mover-path "MAIN.refMover{0}"
+   dotnet run --project csharp -- --netid <AmsNetId> --retry-ms 200 --retry-timeout-ms 10000
    ```
+
+   **連 UmRT 一定要加 `--netid`**：UmRT 有自己的 AmsNetId（XAE 選 Target 時看得到，例如 `x.x.x.x.1.1` 格式），跟本機 XAR 的 `AmsNetId.Local` 不同。不加的話預設連 `AmsNetId.Local`，在 UmRT 上會得到 ADS error 6（target port not found）。連本機 XAR 或遠端 IPC 時同樣給該目標的 AmsNetId。
+
+   **命令重試**：PLC 的命令 method 只設旗標、下一個 PLC cycle 才由 body 取走（見「為什麼 method 只設旗標」）。連續兩個命令打到同一個 FB 時，第二個可能被回 `Previous command not yet taken by PLC, retry`。共用的 RPC client 層（`csharp/XtsRpc.cs` 的 `XtsRpc.Command`，console 與網頁 Live 都走這裡）只對這一種拒絕自動重送：每 `--retry-ms`（預設 200 ms）一次，總上限 `--retry-timeout-ms`（預設 5000 ms，0 = 不重試）。每次重送與最後結果都會印出；到上限仍沒被收下就印原因、非 0 結束。其他拒絕（未 ready、Auto 模式、參數錯…）不重試，照原樣回報。判斷集中在 `PlcReject.IsNotTaken`：RPC method 只回 `BOOL` + `sMsg`，沒有結構化錯誤碼，所以比對 `sMsg` 開頭字串，PLC 改字串時只要改這一處。UmRT 的 PLC 時間比牆鐘慢約 4.25 倍，命令取走得也比較慢，5 s 上限足夠；不夠就加大 `--retry-timeout-ms`。
 
 C# 示範流程：
 
@@ -317,7 +322,7 @@ C# 示範流程：
 | **Offline** | 直接用瀏覽器開 `web/wwwroot/index.html`（`file://`），或 server 起來後網址加 `?mode=offline` | 不接 PLC，不需要 .NET；JS 自己模擬。畫面與按鈕跟 Live 一樣，多一塊「Offline 工具」（1×~8× 加速、對所選 mover 製造 error、下次 Initial 失敗、重設模擬） |
 | **Live** | `dotnet run --project web`，開 `http://localhost:5080` | server 預設只綁 localhost（這頁能對 PLC 下命令）。Live 是 server 提供時的預設，右上角連結可切到 Offline |
 
-Live 的命令列參數沿用 console：`--netid`、`--port`、`--control-path`、`--mover-path`、`--station-path`、`--mover-via-control`、`--station-via-control`、`--poll-ms`（網頁預設 250 ms）。另有 `--no-detail-status`（關掉 mover / 站 `M_GetStatus` 輪詢）；`--urls http://localhost:5081` 之類交給 ASP.NET Core。備案路徑開關與 console 完全相同：
+Live 的命令列參數沿用 console：`--netid`（連 UmRT 必給，見上面「怎麼跑」）、`--port`、`--control-path`、`--mover-path`、`--station-path`、`--mover-via-control`、`--station-via-control`、`--poll-ms`（網頁預設 250 ms）、`--retry-ms` / `--retry-timeout-ms`（同 console 的命令重試；重送期間會佔住 ADS 連線，狀態輪詢暫停）。命令回應多一個 `attempts`（送出次數），有重試時 `sMsg` 後面附 `[重試 n 次後收下]`。另有 `--no-detail-status`（關掉 mover / 站 `M_GetStatus` 輪詢）；`--urls http://localhost:5081` 之類交給 ASP.NET Core。備案路徑開關與 console 完全相同：
 
 ```
 dotnet run --project web -- --mover-path "MAIN.refMover{0}" --station-via-control
@@ -448,5 +453,6 @@ A TwinCAT 3 demo that runs a simulated XTS (4 movers, 3 stations: Load / Press /
 - **Ready gate + Auto/Manual lock** in one function (`F_CheckCmdAllowed`); `M_Stop` is always accepted.
 - **Init sequence**: reset → XTS environment init → wait for movers → Find mover 1 (`IdDetectionMode = Mover1`; the XTS event 9016 "AxisEnabledBeforeMoverIdDetectionError" requires detection before enabling the movers) → power on → enable the CA group.
 - **Status**: PLC builds with 0 errors (1 inherited obsolete warning), `dotnet build` succeeds. Nothing has been activated or run yet; RPC calls on array elements and inherited methods are unverified, and fallback paths are selectable from the command line.
+- **Connecting to UmRT needs `--netid <UmRT AmsNetId>`**; the default `AmsNetId.Local` gives ADS error 6 there. **Command retry**: when the PLC answers `Previous command not yet taken by PLC, retry`, the shared RPC client (`XtsRpc.Command`, used by the console and the web Live mode) resends every `--retry-ms` (200 ms) up to `--retry-timeout-ms` (5000 ms), prints each attempt, and fails with a non-zero exit code if the PLC still has not taken the previous command. Other rejections are never retried. `M_ReadXTS_Status` also returns the PLC time at which Find mover 1, power-on and CA group enable completed, so fast init steps that a 500 ms poll misses are still visible.
 - UmRT time ran about 4.25x slower than wall-clock time on the test PC, so recorded speeds and PLC timings do not represent real hardware.
 - **Web simulator (`web/`)**: one static page (SVG track, stations, movers, workpiece states) with a control panel for the line, a mover and a station. *Offline* mode (open `web/wwwroot/index.html`, or `?mode=offline`) re-implements the PLC behaviour in JS, including the init steps, ready gate, Auto/Manual lock and the same rejection strings. *Live* mode (`dotnet run --project web`) is an ASP.NET Core minimal API that reuses the console's RPC client classes and pushes `M_ReadXTS_Status` / `M_GetStatus` to the page over SSE. Only `dotnet build` and the Offline mode were tested; Live against a runtime is untested.

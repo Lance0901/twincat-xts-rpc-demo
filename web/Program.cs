@@ -3,7 +3,7 @@ using XtsRpcClient;
 using XtsWeb;
 
 // 命令列：與 csharp/ console 相同的 --netid / --port / --mover-path / --station-path /
-// --mover-via-control / --station-via-control / --poll-ms；--no-detail-status 關掉 mover / 站 M_GetStatus 輪詢；
+// --mover-via-control / --station-via-control / --poll-ms / --retry-ms / --retry-timeout-ms；--no-detail-status 關掉 mover / 站 M_GetStatus 輪詢；
 // 其餘 (例如 --urls) 交給 ASP.NET Core。
 var (optArgs, webArgs, detail) = SplitArgs(args);
 Options opt;
@@ -70,12 +70,13 @@ IResult Cmd(PlcConnection plc, Func<XtsRpc, RpcResult> call)
     try
     {
         var r = plc.Run(call);
-        return Results.Ok(new CmdResult(r.Ok, r.Msg(0)));
+        string msg = r.RetryNote.Length > 0 ? $"{r.Msg(0)} [{r.RetryNote}]" : r.Msg(0);
+        return Results.Ok(new CmdResult(r.Ok, msg, r.Attempts));
     }
     catch (Exception ex)
     {
         var hint = ex is AdsErrorException ? " (symbol not found? try --mover-path / --mover-via-control / --station-via-control)" : "";
-        return Results.Json(new CmdResult(false, $"RPC failed: {ex.Message}{hint}"), statusCode: 502);
+        return Results.Json(new CmdResult(false, $"RPC failed: {ex.Message}{hint}", 0), statusCode: 502);
     }
 }
 
@@ -98,7 +99,7 @@ return 0;
 
 static (string[] Opt, string[] Web, bool Detail) SplitArgs(string[] all)
 {
-    string[] withValue = { "--netid", "--port", "--control-path", "--mover-path", "--station-path", "--init-timeout", "--step-timeout", "--poll-ms" };
+    string[] withValue = { "--netid", "--port", "--control-path", "--mover-path", "--station-path", "--init-timeout", "--step-timeout", "--poll-ms", "--retry-ms", "--retry-timeout-ms" };
     string[] flags = { "--mover-via-control", "--station-via-control" };
     var o = new List<string>();
     var w = new List<string>();
