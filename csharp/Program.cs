@@ -11,6 +11,9 @@ const double TrackLengthMm = 3000.0;
 const double CaGapMm = 110.0;
 double[] stationPosMm = { 1600.0, 2100.0, 2600.0 };    // 與 PLC GVL_Param.cStationPosMm 一致
 const double ParkPosMm = 2900.0;                       // 示範後把 mover 停到 Unload 後面
+const double StageHeadBackMm = 200.0;                  // 等待區最前面一格在 Load 後面多遠 (第 4 段往前 150 mm 不會越過 Load)
+const double StagePitchMm = 150.0;                     // 等待區格距 (> CA gap)
+const double PosTolMm = 1.0;                           // 位置容差 (與 PLC cAtStationTolMm 一致)
 
 Text.UseUtf8Console();     // cp950 console 直接 dotnet run 中文也不亂碼
 
@@ -69,6 +72,8 @@ int Run(XtsRpc xts, Options opt)
     // 3. Manual：單一 mover
     Step(Text.Step3Title);
     PrintCmd("M_SetMode(0)", xts.SetMode(0));
+    // mover 只能往前走、CA 不能超車：上一輪留在 Unload / 2900 的 mover 會擋住下一輪，先依環上順序排到 Load 前面
+    if (!StageMovers(xts, opt)) return 1;
     var line = xts.GetLineStatus().Line;
     int front = FindFrontMover(line);
     if (front == 0)
@@ -83,7 +88,9 @@ int Run(XtsRpc xts, Options opt)
     Say(Text.InvalidParamDemo);
     PrintCmd("M_MoveTo(5000, 100)", xts.MoverMoveTo(front, 5000.0, 100.0));
     PrintCmd("M_MoveTo(100, -1)", xts.MoverMoveTo(front, 100.0, -1.0));
-    double target = Ring(line.Movers[front - 1].PositionMm + 150.0);
+    // 往前最多 150 mm，不越過 Load (越過的話送 Load 要繞一整圈，會被其他 mover 擋住)
+    double frontPos = line.Movers[front - 1].PositionMm;
+    double target = Ring(frontPos + Math.Max(0.0, Math.Min(150.0, AheadDist(stationPosMm[StationLoad - 1], frontPos))));
     if (!Cmd($"M_MoveTo({target:F1}, 300)", xts.MoverMoveTo(front, target, 300.0))) return 1;
     if (!WaitMoverIdle(xts, opt, front)) return 1;
     PrintMover(xts, opt, front);
@@ -257,12 +264,51 @@ bool WaitCycle(XtsRpc xts, Options opt)
     return false;
 }
 
-// 前方到 Unload + CA gap 之間沒有其他 mover 的那台 (CA 會讓 mover 排在前車後面)
+// 依環上順序把所有 mover 往前排到 Load 後面的等待區 (Load - 200, -350, -500, ...)。
+// 以「往前到 Load 的距離」排序，最接近 Load 的排最前面；環上順序不變，每台目標都在前車目標後面，只往前走、不會被擋。
+// 已在等待區內 (離 Load 比目標格還近) 的 mover 不往回走，原地不動。
+bool StageMovers(XtsRpc xts, Options opt)
+{
+    var movers = xts.GetLineStatus().Line.Movers;
+    double load = stationPosMm[StationLoad - 1];
+    var order = Enumerable.Range(0, LineStatus.MoverCount)
+        .OrderBy(k => AheadDist(load, movers[k].PositionMm)).ToArray();
+    double prevBack = double.NegativeInfinity;   // 前一台停在 Load 後面多遠 (mm)
+    var moved = new List<int>();
+    foreach (int k in order)
+    {
+        double dist = AheadDist(load, movers[k].PositionMm);
+        double back = Math.Min(Math.Max(prevBack + StagePitchMm, StageHeadBackMm), dist);
+        prevBack = back;
+        if (dist - back <= PosTolMm) continue;
+        double target = Ring(load - back);
+        if (!Cmd($"mover {k + 1} M_MoveTo({target:F1}, 400)", xts.MoverMoveTo(k + 1, target, 400.0))) return false;
+        moved.Add(k + 1);
+    }
+    if (moved.Count == 0)
+    {
+        Say(Text.StageAlreadyDone);
+        return true;
+    }
+    Say(Text.StageMovers(moved));
+    foreach (int n in moved)
+    {
+        if (!WaitMoverIdle(xts, opt, n)) return false;
+    }
+    return true;
+}
+
+// 從 fromMm 往前走到 toMm 的距離 (mm)；在 toMm 容差內 (含剛好超過一點) 回 0 附近，不當成要繞一圈
+double AheadDist(double toMm, double fromMm) => Ring(toMm - fromMm + PosTolMm) - PosTolMm;
+
+// 前方沒有其他 mover 的那台：mover 只往前走，示範與 M_StartCycle 都先到 Load 再到 Unload，
+// 所以要看「往前經 Load 到 Unload + CA gap」整段 (CA 會讓 mover 排在前車後面)
 int FindFrontMover(LineStatus line)
 {
     for (int k = 0; k < LineStatus.MoverCount; k++)
     {
-        double path = Ring(stationPosMm[StationUnload - 1] - line.Movers[k].PositionMm) + CaGapMm;
+        double path = AheadDist(stationPosMm[StationLoad - 1], line.Movers[k].PositionMm)
+            + (stationPosMm[StationUnload - 1] - stationPosMm[StationLoad - 1]) + CaGapMm;
         bool clear = true;
         for (int j = 0; j < LineStatus.MoverCount; j++)
         {

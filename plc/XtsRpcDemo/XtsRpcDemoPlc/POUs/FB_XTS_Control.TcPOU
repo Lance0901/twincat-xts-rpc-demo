@@ -594,7 +594,7 @@ END_IF]]></ST>
       </Implementation>
     </Method>
     <Method Name="M_StartCycle" Id="{35ca7495-b013-4a7f-804c-0a4f03798805}">
-      <Declaration><![CDATA[// RPC：nMover 跑一輪 Load → Press → Unload。需 ready + Auto、三站 Idle、mover 沒工件、路徑上沒有其他 mover。
+      <Declaration><![CDATA[// RPC：nMover 跑一輪 Load → Press → Unload。需 ready + Auto、三站 Idle、mover 沒工件、往前經 Load 到 Unload 的路徑上沒有其他 mover。
 {attribute 'TcRpcEnable'}
 METHOD PUBLIC M_StartCycle : BOOL
 VAR_INPUT
@@ -606,7 +606,7 @@ END_VAR
 VAR
     nMv : INT;
     nOther : INT;
-    fPathMm : LREAL;            // 到 Unload 的路徑長 + CA 間距 (mm)
+    fPathMm : LREAL;            // 往前經 Load 到 Unload 的路徑長 + CA 間距 (mm)
     fAheadMm : LREAL;           // 其他 mover 在前方多遠 (mm)
 END_VAR]]></Declaration>
       <Implementation>
@@ -640,9 +640,13 @@ IF (fbLoad.eState <> E_StationState.Idle) OR (fbPress.eState <> E_StationState.I
     sMsg := 'All stations must be Idle';
     RETURN;
 END_IF
-// CA 會讓 mover 排在前車後面，路徑上有車就到不了站
-fPathMm := F_RingPosition(fPositionMm := GVL_Param.cStationPosMm[GVL_Param.cStationUnload] - aMover[nMv].fPositionMm,
-    fLengthMm := GVL_Param.cTrackLengthMm) + GVL_Param.cCaGapMm;
+// CA 會讓 mover 排在前車後面，路徑上有車就到不了站。mover 只往前走、循環先到 Load，
+// 所以路徑是「往前到 Load」+「Load 到 Unload」：停在 Unload 或 Load 之後的 mover 要繞一圈才到 Load。
+// 加減 cAtStationTolMm：停在 Load 容差內 (含剛好超過一點) 算 0，不當成要繞一圈
+fPathMm := F_RingPosition(fPositionMm := GVL_Param.cStationPosMm[GVL_Param.cStationLoad] - aMover[nMv].fPositionMm
+        + GVL_Param.cAtStationTolMm, fLengthMm := GVL_Param.cTrackLengthMm) - GVL_Param.cAtStationTolMm
+    + (GVL_Param.cStationPosMm[GVL_Param.cStationUnload] - GVL_Param.cStationPosMm[GVL_Param.cStationLoad])
+    + GVL_Param.cCaGapMm;
 FOR nOther := 1 TO GVL_Param.cMoverCount DO
     IF nOther <> nMv THEN
         fAheadMm := F_RingPosition(fPositionMm := aMover[nOther].fPositionMm - aMover[nMv].fPositionMm,

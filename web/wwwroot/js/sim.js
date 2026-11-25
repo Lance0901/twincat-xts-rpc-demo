@@ -285,7 +285,9 @@
     if (mv.hasPart) return no('Mover already has a part, unload it first');
     if (mv.busy || mv.error) return no('Mover busy or in error');
     if (this.stations.some(function (s) { return s.state !== ST.Idle; })) return no('All stations must be Idle');
-    var path = ring(P.stationPosMm[2] - mv.pos) + P.caGapMm;
+    // 只往前走、先到 Load：路徑 = 往前到 Load (容差內算 0) + Load 到 Unload + CA gap
+    var path = ring(P.stationPosMm[0] - mv.pos + P.atStationTolMm) - P.atStationTolMm
+      + (P.stationPosMm[2] - P.stationPosMm[0]) + P.caGapMm;
     for (var o = 1; o <= P.moverCount; o++) {
       if (o === n) continue;
       var ahead = ring(this.movers[o - 1].pos - mv.pos);

@@ -337,7 +337,7 @@ Idle/Done ─M_StartCycle─► ToStation(Load) ─到站─► InStation(Load) 
 ```
 
 - `aStationDoneMs[1..3]` 記錄每站完成的 PLC 時間（從 `M_StartCycle` 起算，ms），在 `ST_LineStatus` 裡讀得到。
-- **CA 與路徑**：mover 都在 CA group，前面有車就排在後面等（`Busy` 一直 TRUE）。`M_StartCycle` 檢查「這台 mover 往前到 Unload + 110 mm 之間沒有其他 mover」，有就拒絕並說是哪一台。
+- **CA 與路徑**：mover 都在 CA group，前面有車就排在後面等（`Busy` 一直 TRUE）。mover 只往正方向走，循環先到 Load，所以 `M_StartCycle` 檢查「這台 mover 往前經 Load 到 Unload + 110 mm 之間沒有其他 mover」，有就拒絕並說是哪一台。停在 Unload（或 Load 之後）的 mover 要繞一整圈才到 Load，路徑上一定有別台，會被拒。
 
 ## 快速開始
 
@@ -365,7 +365,7 @@ dotnet run --project csharp -- --netid <UmRT 的 AmsNetId>
 |---|---|---|
 | 1 | ready 前對 mover 2 下 `M_MoveTo` | 被拒：`XTS not ready, call M_InitialXTS first`（已 ready 則略過） |
 | 2 | `M_InitialXTS`，每 0.5 s 輪詢 `M_ReadXTS_Status` 印出步驟 | 到 Ready，並印初始化各步完成時間（逾時 900 s 牆鐘） |
-| 3 | `M_SetMode(0)` Manual；從 `M_GetStatus` 挑一台「前方到 Unload 沒有其他 mover」的 mover | `Mode -> Manual` |
+| 3 | `M_SetMode(0)` Manual；依環上順序把 4 台 mover 往前排到 Load 後面的等待區（Load − 200 起每 150 mm 一格，只往前走、不超車），再挑一台「往前經 Load 到 Unload 沒有其他 mover」的 mover | `Mode -> Manual`；上一輪留在 Unload / 2900 mm 的 mover 會先繞回等待區，所以可以連跑多次 |
 | 4 | 單一 mover（`aMover[n]`）：`M_GetStatus` → 不合法參數兩次（位置 5000、速度 -1）→ `M_MoveTo` 往前 150 mm → 等停 → `M_Stop` | 兩次被拒（範圍錯誤訊息）、一次 Accepted、Stop 永遠 Accepted |
 | 5 | 單站：`M_SendToStation` 送到 Load → 站 `M_Start` → 等 Done → `M_Release`，Press、Unload 同樣；最後停到 2900 mm 讓路 | 印出每步 XYZ 與 mover 的 `bHasPart` / `bPressed` 變化 |
 | 6 | `M_SetMode(1)` Auto，再對 mover 下 `M_MoveTo` | 被拒：`Rejected in Auto mode, call M_SetMode(0) first` |
@@ -585,7 +585,7 @@ PLC Build 0 error：
 | 所有命令回 `XTS not ready, call M_InitialXTS first` | 還沒初始化，或 ready 後掉出（mover error、失電、CA group 不 ready、站軸 error） | 呼叫 `M_InitialXTS`；看 `M_ReadXTS_Status` 的 `sStepMsg` / `nErrId`（`16#E310` = 掉出可控） |
 | mover / 站命令回 `Rejected in Auto mode, call M_SetMode(0) first` | Auto 模式只收整線命令 | 先 `M_SetMode(0)`；自動循環中不能切模式，先等完成或 `M_Stop` |
 | `M_StartCycle` 回 `Needs Auto mode, call M_SetMode(1) first` | Manual 模式不收自動循環 | 先 `M_SetMode(1)` |
-| `M_StartCycle` 拒絕並提到另一台 mover | 路徑上（到 Unload + 110 mm）有別的 mover，CA 會卡住 | 選前方淨空的 mover，或在 Manual 把擋路的 mover 移開 |
+| `M_StartCycle` 拒絕並提到另一台 mover | 路徑上（往前經 Load 到 Unload + 110 mm）有別的 mover，CA 會卡住 | 選前方淨空的 mover，或在 Manual 把擋路的 mover 往前移開；console 第 3 段會自動排隊 |
 | console 中文變亂碼（例如 `蝚?2 甈?`） | console codepage 不是 UTF-8 | 程式現在啟動時會自動切成 UTF-8，一般不會再遇到；舊終端機或輸出被另外轉碼時，跑之前先 `chcp 65001` |
 | `ADS 錯誤` 且 symbol 找不到 | 路徑對不上（改了 instance 名稱或結構） | 試 `--mover-path "MAIN.refMover{0}"`、`--mover-via-control`、`--station-via-control` |
 | 初始化卡在 `FindMover1Wait` 後進 Error（`16#E303`） | Mover ID detection 失敗 | 看 `sStepMsg`；確認所有 mover 位置有效、XPU `IdDetectionMode = Mover1` |

@@ -122,10 +122,16 @@ internal static class Text
     public static string Step3Title => "3. M_SetMode(0) Manual";
 
     public static string NoClearMover => P(
-        "找不到路徑淨空的 mover (每台前方到 Unload + CA gap 都有車)，請先手動排開",
-        "No mover with a clear path (every mover has another one ahead before Unload + CA gap); move them apart manually first");
+        "找不到路徑淨空、沒有工件的 mover (每台往前經 Load 到 Unload + CA gap 都有車，或前車有工件)，請先手動排開或 M_Reset",
+        "No mover with a clear path and no part (every mover has another one ahead via Load up to Unload + CA gap, or the front one has a part); move them apart manually or M_Reset first");
 
-    public static string PickedMover(int mover) => P($"選 mover {mover}：前方到 Unload 沒有其他 mover", $"Picked mover {mover}: no other mover ahead up to Unload");
+    public static string PickedMover(int mover) => P($"選 mover {mover}：往前經 Load 到 Unload 沒有其他 mover", $"Picked mover {mover}: no other mover ahead via Load up to Unload");
+
+    public static string StageMovers(IEnumerable<int> movers) => P(
+        $"依環上順序把 mover {string.Join(", ", movers)} 往前排到 Load 前面的等待區，等停",
+        $"Moving mover {string.Join(", ", movers)} forward into the waiting area before Load (ring order kept), waiting for stop");
+
+    public static string StageAlreadyDone => P("mover 已在 Load 前面的等待區，不用移動", "Movers are already in the waiting area before Load");
 
     public static string ViaControl(string path, string method) => P($"{path} ({method} 備案)", $"{path} ({method} fallback)");
 
