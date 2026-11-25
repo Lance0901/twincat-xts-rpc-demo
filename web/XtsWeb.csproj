@@ -11,10 +11,11 @@
     <PackageReference Include="Beckhoff.TwinCAT.Ads" Version="7.0.389" />
   </ItemGroup>
 
-  <!-- 與 csharp/ console 共用同一份 RPC client 原始碼 (XtsRpc、Options、LineStatus)，不複製 -->
+  <!-- 與 csharp/ console 共用同一份 RPC client 原始碼 (XtsRpc、Options、LineStatus、Text)，不複製 -->
   <ItemGroup>
     <Compile Include="..\csharp\XtsRpc.cs" Link="Shared\XtsRpc.cs" />
     <Compile Include="..\csharp\Options.cs" Link="Shared\Options.cs" />
+    <Compile Include="..\csharp\Strings.cs" Link="Shared\Strings.cs" />
   </ItemGroup>
 
 </Project>

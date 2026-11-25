@@ -99,9 +99,10 @@ csharp/                                  .NET 8 console (XtsRpcClient)
   Program.cs                             8 段示範流程
   XtsRpc.cs                              RPC client：InvokeRpcMethod 包裝、命令重試、ST_LineStatus 解析 (console 與 web 共用)
   Options.cs                             命令列參數 (console 與 web 共用)
+  Strings.cs                             console 文字中英對照 (--lang) 與 UTF-8 console 設定 (console 與 web 共用)
 web/                                     網頁模擬器：ASP.NET Core minimal API (.NET 8) + 純靜態前端
-  XtsWeb.csproj Program.cs PlcService.cs   API endpoint、ADS 連線、狀態輪詢 + SSE；以 <Compile Include> 連結 csharp/XtsRpc.cs、Options.cs
-  wwwroot/index.html css/ js/              SVG 畫面；sim.js = Offline 模擬器，live.js = Live 後端，app.js = 畫面與按鈕
+  XtsWeb.csproj Program.cs PlcService.cs   API endpoint、ADS 連線、狀態輪詢 + SSE；以 <Compile Include> 連結 csharp/XtsRpc.cs、Options.cs、Strings.cs
+  wwwroot/index.html css/ js/              SVG 畫面；sim.js = Offline 模擬器，live.js = Live 後端，app.js = 畫面與按鈕，i18n.js = 介面文字中英對照
 docs/images/                             截圖 (PLC Build、UmRT runtime、網頁 Offline)
 ```
 
@@ -356,7 +357,7 @@ Idle/Done ─M_StartCycle─► ToStation(Load) ─到站─► InStation(Load) 
 dotnet run --project csharp -- --netid <UmRT 的 AmsNetId>
 ```
 
-中文變亂碼時先執行 `chcp 65001`（見[疑難排解](#疑難排解)）。
+程式啟動時自己把 console 切成 UTF-8（結束時還原原本的 codepage），預設 cp950 的 cmd / Windows PowerShell 直接跑中文就正確，不用先 `chcp 65001`。要英文輸出加 `--lang en`。
 
 **8 段示範各做什麼**
 
@@ -387,6 +388,7 @@ dotnet run --project csharp -- --netid <UmRT 的 AmsNetId>
 | `--poll-ms <ms>` | `500`（網頁 `250`） | 狀態輪詢間隔 |
 | `--retry-ms <ms>` | `200` | PLC 回「上一個命令還沒被收下」時的重送間隔（必須 > 0） |
 | `--retry-timeout-ms <ms>` | `5000` | 重送總上限；`0` = 不重試 |
+| `--lang <zh\|en>` | `zh` | console 輸出語言（段落標題、說明、結果、錯誤、重試訊息、`--help`）；PLC 回的 `sMsg` 本來就是英文，原樣印。網頁 Live 帶這個參數只影響 server 端的重試 log 與重試說明 |
 | `-h` / `--help` | | 印說明 |
 | `--no-detail-status` | 開 | **只有網頁**：關掉 mover / 站 `M_GetStatus` 輪詢 |
 
@@ -462,10 +464,11 @@ PLC 的命令 method 只設旗標、下一個 PLC cycle 才由 body 取走。連
 - mover 顏色：待命（青）、busy（橘，含 CA 排隊）、error（紅 + 外框）、未送電（灰）；點 mover 可選取。
 - 工件三種樣子：**有**（橘色方塊）、**已壓**（深色扁方塊）、**空**（虛線框）。
 - 命令按鈕不會因為 ready / 模式而反灰，故意讓你按下去看 PLC 回的拒絕原因。
+- **語言切換**：右上角「語言」下拉選中文 / English，Live 與 Offline 都有效，選擇記在瀏覽器 localStorage；網址加 `?lang=en`（或 `?lang=zh`）直接以該語言開啟，例如 `index.html?lang=en`、`http://localhost:5080/?lang=en`。介面文字集中在 `wwwroot/js/i18n.js`；PLC / 模擬器回的 `sMsg` 本來就是英文，原樣顯示。
 
 **Live 的資料流**：背景工作每 `--poll-ms` 呼叫一次 `M_ReadXTS_Status` 與總控 `M_GetStatus`，每 4 次再對每台 mover、每一站呼叫各自的 `M_GetStatus`（失敗訊息放在狀態 JSON 的 `detailWarnings`，網頁頂端顯示）。結果合成同一份 JSON（含 `initTrace` 初始化各步完成時間），用 SSE（`/api/events`）推給所有開著的網頁。命令與輪詢共用一條 ADS 連線，一次一個呼叫；命令重試期間狀態輪詢暫停。
 
-**與 console 共用 RPC client**：`web/XtsWeb.csproj` 用 `<Compile Include>` 直接連結 `csharp/XtsRpc.cs`、`csharp/Options.cs`，不複製。備案路徑開關與 console 相同：
+**與 console 共用 RPC client**：`web/XtsWeb.csproj` 用 `<Compile Include>` 直接連結 `csharp/XtsRpc.cs`、`csharp/Options.cs`、`csharp/Strings.cs`，不複製。備案路徑開關與 console 相同：
 
 ```
 dotnet run --project web -- --netid <AmsNetId> --mover-path "MAIN.refMover{0}" --station-via-control
@@ -575,7 +578,7 @@ PLC Build 0 error：
 | mover / 站命令回 `Rejected in Auto mode, call M_SetMode(0) first` | Auto 模式只收整線命令 | 先 `M_SetMode(0)`；自動循環中不能切模式，先等完成或 `M_Stop` |
 | `M_StartCycle` 回 `Needs Auto mode, call M_SetMode(1) first` | Manual 模式不收自動循環 | 先 `M_SetMode(1)` |
 | `M_StartCycle` 拒絕並提到另一台 mover | 路徑上（到 Unload + 110 mm）有別的 mover，CA 會卡住 | 選前方淨空的 mover，或在 Manual 把擋路的 mover 移開 |
-| console 中文變亂碼（例如 `蝚?2 甈?`） | console codepage 不是 UTF-8 | 跑之前 `chcp 65001`，或改用 Windows Terminal |
+| console 中文變亂碼（例如 `蝚?2 甈?`） | console codepage 不是 UTF-8 | 程式現在啟動時會自動切成 UTF-8，一般不會再遇到；舊終端機或輸出被另外轉碼時，跑之前先 `chcp 65001` |
 | `ADS 錯誤` 且 symbol 找不到 | 路徑對不上（改了 instance 名稱或結構） | 試 `--mover-path "MAIN.refMover{0}"`、`--mover-via-control`、`--station-via-control` |
 | 初始化卡在 `FindMover1Wait` 後進 Error（`16#E303`） | Mover ID detection 失敗 | 看 `sStepMsg`；確認所有 mover 位置有效、XPU `IdDetectionMode = Mover1` |
 
@@ -623,5 +626,6 @@ A TwinCAT 3 demo that runs a simulated XTS (4 movers, 3 stations: Load / Press /
 - **Init sequence**: reset → XTS environment init → wait for movers → Find mover 1 (`IdDetectionMode = Mover1`; XTS event 9016 requires detection before enabling the movers) → power on → enable the CA group.
 - **Verified on UmRT**: build with 0 errors, activate and run; init reaches Ready in about 28 s with Mover ID detection valid; array-element (`aMover[n]`) and inherited (`fbLoad.M_Start`) RPC paths work; STRING / enum / STRUCT outputs parse correctly; one full cycle completes (PLC time about 11.4 / 15.8 / 26.6 s for Load / Press / Unload). UmRT time ran about 4.25x slower than wall-clock time, so recorded speeds and PLC timings do not represent real hardware.
 - **Connecting to UmRT needs `--netid <UmRT AmsNetId>`**; the default `AmsNetId.Local` gives ADS error 6. When the PLC answers `Previous command not yet taken by PLC, retry`, the shared client resends every `--retry-ms` (200 ms) up to `--retry-timeout-ms` (5000 ms); other rejections are never retried.
+- **Console language**: Chinese by default, `--lang en` switches every line the client prints (the PLC `sMsg` is English already). The client switches the console to UTF-8 at start-up and restores the code page on exit, so no `chcp 65001` is needed. The web page has a 中文 / English selector (remembered in localStorage) and accepts `?lang=en`.
 - **Web simulator (`web/`)**: *Live* mode (`dotnet run --project web`) is an ASP.NET Core minimal API that reuses the console's RPC client and pushes status to the page over SSE; *Offline* mode (open `web/wwwroot/index.html`) re-implements the PLC behaviour in JS.
 - License: MIT.
