@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="E_XtsMode" Id="{d30fc1df-193f-4eea-afce-2b48dc7d444a}">
+    <Declaration><![CDATA[{attribute 'qualified_only'}
+{attribute 'strict'}
+TYPE E_XtsMode :
+(
+    Manual := 0,    // 手動：C# 可直接對 mover / 站下命令
+    Auto := 1       // 自動：只收整線命令 (M_StartCycle)
+) INT;
+END_TYPE]]></Declaration>
+  </DUT>
+</TcPlcObject>

@@ -1,0 +1,42 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <GVL Name="GVL_Param" Id="{069bfe69-1383-48bb-a78b-68c496d6a55e}">
+    <Declaration><![CDATA[{attribute 'qualified_only'}
+VAR_GLOBAL CONSTANT
+    cMoverCount : INT := 4;                     // mover 數，與 XTS 設定一致
+    cStationCount : INT := 3;                   // 站數
+    cStationLoad : INT := 1;                    // 站號：Load
+    cStationPress : INT := 2;                   // 站號：Press
+    cStationUnload : INT := 3;                  // 站號：Unload
+    cTrackLengthMm : LREAL := 3000.0;           // 軌道長 (mm)
+    cStationPosMm : ARRAY[1..3] OF LREAL := [1600.0, 2100.0, 2600.0];   // 各站 mover 停止位置 (mm, 環上)
+    cMaxVelocityMmS : LREAL := 1500.0;          // mover 速度上限 (mm/s)
+    cDefaultVelocityMmS : LREAL := 400.0;       // 自動循環 / 送站速度 (mm/s)
+    cMoverAccMmS2 : LREAL := 2000.0;            // mover 加減速度 (mm/s2)
+    cMoverJerkMmS3 : LREAL := 20000.0;          // mover jerk (mm/s3)
+    cCaGapMm : LREAL := 110.0;                  // CA 最小間距 (mm)
+    cAtStationTolMm : LREAL := 1.0;             // 判定到站的容差 (mm)
+    cMoveTimeout : TIME := T#10M;               // mover 單次移動上限
+    cInitStepTimeout : TIME := T#5M;            // 初始化每一步上限，UmRT 偏慢所以放寬
+    cResetTime : TIME := T#500MS;               // 初始化 reset 保持時間
+    cStationStepTimeout : TIME := T#2M;         // 站內每一步上限
+    cGantryAxisCount : INT := 3;                // XYZ 軸數
+    cAxisX : INT := 1;
+    cAxisY : INT := 2;
+    cAxisZ : INT := 3;
+    cGantryVelocityMmS : LREAL := 200.0;        // XYZ 與下壓軸速度 (mm/s)
+    cGantryAccMmS2 : LREAL := 1000.0;           // XYZ 與下壓軸加減速度 (mm/s2)
+    cGantryZUpMm : LREAL := 0.0;                // Z 上位 (mm)
+    cGantryZDownMm : LREAL := 80.0;             // Z 下位 (mm)
+    cGantryFeederXMm : LREAL := 300.0;          // Load 取料點 X (mm)
+    cGantryFeederYMm : LREAL := 150.0;          // Load 取料點 Y (mm)
+    cGantryOutXMm : LREAL := 300.0;             // Unload 放料點 X (mm)
+    cGantryOutYMm : LREAL := -150.0;            // Unload 放料點 Y (mm)
+    cGantryMoverXMm : LREAL := 0.0;             // mover 正上方 X (mm)
+    cGantryMoverYMm : LREAL := 0.0;             // mover 正上方 Y (mm)
+    cGripTime : TIME := T#300MS;                // 夾 / 放 時間
+    cPressZDownMm : LREAL := 50.0;              // 下壓位置 (mm)
+    cPressHoldTime : TIME := T#1S;              // 保壓時間
+END_VAR]]></Declaration>
+  </GVL>
+</TcPlcObject>

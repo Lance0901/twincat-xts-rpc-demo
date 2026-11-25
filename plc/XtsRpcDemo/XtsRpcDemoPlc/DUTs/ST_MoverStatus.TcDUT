@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_MoverStatus" Id="{f8d0d886-2b95-4fcc-8de2-cf41ea998ee7}">
+    <Declaration><![CDATA[// C# 端對應 MoverStatus (Pack = 1)
+{attribute 'pack_mode' := '1'}
+TYPE ST_MoverStatus :
+STRUCT
+    fPositionMm : LREAL;    // 環上位置 (mm), 0~3000
+    fVelocityMmS : LREAL;   // 實際速度 (mm/s)
+    bPowered : BOOL;
+    bBusy : BOOL;
+    bDone : BOOL;
+    bError : BOOL;
+    nErrorId : UDINT;
+    bHasPart : BOOL;        // 有工件
+    bPressed : BOOL;        // 已下壓
+    nStation : INT;         // 停在哪一站，0 = 不在站上
+END_STRUCT
+END_TYPE]]></Declaration>
+  </DUT>
+</TcPlcObject>

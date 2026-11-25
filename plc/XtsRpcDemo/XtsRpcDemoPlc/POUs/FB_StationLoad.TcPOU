@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_StationLoad" Id="{058d36ab-87f8-4fc4-a2ad-a644fc6090c6}" SpecialFunc="None">
+    <Declaration><![CDATA[// 第 1 站 Load：XYZ 從取料點夾工件放到 mover 上。mover 必須沒有工件。
+FUNCTION_BLOCK FB_StationLoad EXTENDS FB_StationGantry]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[fPickXMm := GVL_Param.cGantryFeederXMm;
+fPickYMm := GVL_Param.cGantryFeederYMm;
+fPlaceXMm := GVL_Param.cGantryMoverXMm;
+fPlaceYMm := GVL_Param.cGantryMoverYMm;
+SUPER^(aAxis := aAxis);]]></ST>
+    </Implementation>
+    <Method Name="M_CheckStart" Id="{0d3074ae-34ba-48be-b540-542c155de6b8}">
+      <Declaration><![CDATA[METHOD PROTECTED M_CheckStart : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF bMoverHasPart THEN
+    sMsg := 'Mover already has a part';
+    M_CheckStart := FALSE;
+ELSE
+    sMsg := '';
+    M_CheckStart := TRUE;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

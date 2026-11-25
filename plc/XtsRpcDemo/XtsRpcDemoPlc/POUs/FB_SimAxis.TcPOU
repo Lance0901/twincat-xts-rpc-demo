@@ -1,0 +1,62 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_SimAxis" Id="{beca07b3-a4d2-4096-adc5-8180685d3c9a}" SpecialFunc="None">
+    <Declaration><![CDATA[// 單一 NC 模擬軸 (站上 XYZ / 下壓軸)：送電、絕對移動、停止、reset。每 cycle 呼叫。
+FUNCTION_BLOCK FB_SimAxis
+VAR_INPUT
+    bPower : BOOL;
+    bExecute : BOOL;            // 上升沿移到 fTargetMm
+    bHalt : BOOL;               // 上升沿停止，優先於 bExecute
+    bReset : BOOL;              // 上升沿 MC_Reset，並清 bError
+    fTargetMm : LREAL;          // 目標位置 (mm)
+    fVelocityMmS : LREAL;       // 速度 (mm/s), > 0
+    fAccMmS2 : LREAL;           // 加減速度 (mm/s2), > 0
+END_VAR
+VAR_IN_OUT
+    stAxis : AXIS_REF;
+END_VAR
+VAR_OUTPUT
+    bPowered : BOOL;
+    bBusy : BOOL;
+    bDone : BOOL;               // 本次移動到位，bExecute 回 FALSE 時清掉
+    bError : BOOL;
+    nErrorId : UDINT;
+    fActPosMm : LREAL;          // 實際位置 (mm)
+END_VAR
+VAR
+    fbPower : MC_Power;
+    fbReset : MC_Reset;
+    fbMove : MC_MoveAbsolute;
+    fbHalt : MC_Halt;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[stAxis.ReadStatus();
+fbPower(Axis := stAxis, Enable := bPower, Enable_Positive := bPower, Enable_Negative := bPower, Override := 100);
+fbReset(Axis := stAxis, Execute := bReset);
+fbMove(Axis := stAxis, Execute := bExecute AND fbPower.Status AND NOT bHalt,
+    Position := fTargetMm, Velocity := fVelocityMmS, Acceleration := fAccMmS2, Deceleration := fAccMmS2);
+fbHalt(Axis := stAxis, Execute := bHalt AND fbPower.Status, Deceleration := fAccMmS2);
+bPowered := fbPower.Status;
+bBusy := fbMove.Busy OR fbHalt.Busy;
+bDone := fbMove.Done;
+fActPosMm := stAxis.NcToPlc.ActPos;
+IF bReset THEN
+    bError := FALSE;
+    nErrorId := 0;
+END_IF
+IF fbPower.Error THEN
+    bError := TRUE;
+    nErrorId := fbPower.ErrorID;
+ELSIF fbMove.Error THEN
+    bError := TRUE;
+    nErrorId := fbMove.ErrorID;
+ELSIF fbHalt.Error THEN
+    bError := TRUE;
+    nErrorId := fbHalt.ErrorID;
+ELSIF stAxis.Status.Error THEN
+    bError := TRUE;
+    nErrorId := stAxis.Status.ErrorID;
+END_IF]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

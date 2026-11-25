@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="F_RingPosition" Id="{8296d8c7-cbe5-4be0-876b-24e3223f9ce4}" SpecialFunc="None">
+    <Declaration><![CDATA[// 把位置換算到環上 0 ~ fLengthMm
+FUNCTION F_RingPosition : LREAL
+VAR_INPUT
+    fPositionMm : LREAL;    // 任意位置 (mm)
+    fLengthMm : LREAL;      // 環長 (mm), > 0
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF fLengthMm <= 0.0 THEN
+    F_RingPosition := 0.0;
+    RETURN;
+END_IF
+// TRUNC 回 DINT；|位置| 在 DINT 範圍內 (±2.1e9 mm) 不會溢位
+F_RingPosition := fPositionMm - DINT_TO_LREAL(TRUNC(fPositionMm / fLengthMm)) * fLengthMm;
+IF F_RingPosition < 0.0 THEN
+    F_RingPosition := F_RingPosition + fLengthMm;
+END_IF]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

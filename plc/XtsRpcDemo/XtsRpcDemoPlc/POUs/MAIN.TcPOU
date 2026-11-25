@@ -1,0 +1,27 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="MAIN" Id="{58321408-f0ca-4328-bc43-2f4e038f189c}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM MAIN
+VAR
+    aAxis : ARRAY[1..GVL_Param.cMoverCount] OF AXIS_REF;              // 連 NC Mover Axis 1..4
+    stCaGroup : Tc3_McCoordinatedMotion.AXES_GROUP_REF;                 // 連 XtsCaGroup
+    aLoadAxis : ARRAY[1..GVL_Param.cGantryAxisCount] OF AXIS_REF;      // 連 Load X / Y / Z
+    aUnloadAxis : ARRAY[1..GVL_Param.cGantryAxisCount] OF AXIS_REF;    // 連 Unload X / Y / Z
+    stPressAxis : AXIS_REF;                                             // 連 Press Z
+    fbXts : FB_XTS_Control;                                             // C# RPC 主入口：MAIN.fbXts
+    refMover1 : REFERENCE TO FB_Mover;                                  // 備案 RPC 路徑：MAIN.refMover1..4
+    refMover2 : REFERENCE TO FB_Mover;
+    refMover3 : REFERENCE TO FB_Mover;
+    refMover4 : REFERENCE TO FB_Mover;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[fbXts(aMoverAxis := aAxis, stGroup := stCaGroup, aLoadAxis := aLoadAxis,
+    aUnloadAxis := aUnloadAxis, stPressAxis := stPressAxis);
+// REFERENCE 每 cycle 重取 (PTR-03)
+refMover1 REF= fbXts.M_GetMover(1);
+refMover2 REF= fbXts.M_GetMover(2);
+refMover3 REF= fbXts.M_GetMover(3);
+refMover4 REF= fbXts.M_GetMover(4);]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

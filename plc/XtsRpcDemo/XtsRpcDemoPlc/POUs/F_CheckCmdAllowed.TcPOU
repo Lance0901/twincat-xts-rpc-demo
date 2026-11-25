@@ -1,0 +1,28 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="F_CheckCmdAllowed" Id="{1adda2fd-4e8f-4b70-9dbc-4e62ac1a87ba}" SpecialFunc="None">
+    <Declaration><![CDATA[// 命令允許檢查，所有 RPC 命令 method 都只呼叫這一個 (ready 閘門 + 模式鎖)
+FUNCTION F_CheckCmdAllowed : BOOL
+VAR_INPUT
+    stPermit : ST_CmdPermit;
+    bNeedManual : BOOL;     // 直接對 mover / 站的命令
+    bNeedAuto : BOOL;       // 整線自動命令
+END_VAR
+VAR_OUTPUT
+    sMsg : STRING;          // 拒絕原因，允許時為空字串
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[F_CheckCmdAllowed := FALSE;
+IF NOT stPermit.bReady THEN
+    sMsg := 'XTS not ready, call M_InitialXTS first';
+ELSIF bNeedManual AND (stPermit.eMode <> E_XtsMode.Manual) THEN
+    sMsg := 'Rejected in Auto mode, call M_SetMode(0) first';
+ELSIF bNeedAuto AND (stPermit.eMode <> E_XtsMode.Auto) THEN
+    sMsg := 'Needs Auto mode, call M_SetMode(1) first';
+ELSE
+    sMsg := '';
+    F_CheckCmdAllowed := TRUE;
+END_IF]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

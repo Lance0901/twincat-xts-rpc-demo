@@ -424,3 +424,20 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+
+## TwinCAT 3
+_Boot/
+_CompileInfo/
+_Libraries/
+_Repository/
+.tcauto-backup/
+*.tsproj.bak
+*.~u
+*.tpy
+*.tclrs
+*.compiled-library
+*.compiled-library-ge33
+*.compileinfo
+LineIDs.dbg
+LineIDs.dbg.bak
+*.tnzip

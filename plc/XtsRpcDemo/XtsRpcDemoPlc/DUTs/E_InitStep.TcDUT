@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="E_InitStep" Id="{d1382cb6-c285-49ba-b4d9-ffbb56dd0ab6}">
+    <Declaration><![CDATA[{attribute 'qualified_only'}
+{attribute 'strict'}
+TYPE E_InitStep :
+(
+    Idle := 0,              // 尚未初始化
+    Reset := 5,             // MC_Reset、斷電、group disable
+    InitEnvironment := 10,  // Tc3_XTS_Utility 環境 Init
+    WaitMovers := 20,       // 等 mover 數量與位置有效
+    FindMover1 := 21,       // Mover ID detection 觸發 (IdDetectionMode = Mover1 才做)
+    FindMover1Wait := 22,   // 等 detection 結果
+    PowerOn := 30,          // MC_Power 所有 mover 與站上軸
+    EnableGroup := 40,      // mover 加進 CA group 並 enable
+    Ready := 100,           // 可控
+    Error := 900            // 失敗，原因見 sInitMsg
+) INT;
+END_TYPE]]></Declaration>
+  </DUT>
+</TcPlcObject>

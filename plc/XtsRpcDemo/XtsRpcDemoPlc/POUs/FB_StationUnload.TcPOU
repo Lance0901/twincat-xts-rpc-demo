@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_StationUnload" Id="{7a0c324d-a425-46ef-8fdf-1012b79ddc5a}" SpecialFunc="None">
+    <Declaration><![CDATA[// 第 3 站 Unload：XYZ 從 mover 夾走工件放到出料點。mover 必須有工件。
+FUNCTION_BLOCK FB_StationUnload EXTENDS FB_StationGantry]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[fPickXMm := GVL_Param.cGantryMoverXMm;
+fPickYMm := GVL_Param.cGantryMoverYMm;
+fPlaceXMm := GVL_Param.cGantryOutXMm;
+fPlaceYMm := GVL_Param.cGantryOutYMm;
+SUPER^(aAxis := aAxis);]]></ST>
+    </Implementation>
+    <Method Name="M_CheckStart" Id="{18fdfefd-7a69-4870-8cce-889c9ce3889d}">
+      <Declaration><![CDATA[METHOD PROTECTED M_CheckStart : BOOL
+VAR_OUTPUT
+    sMsg : STRING;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF NOT bMoverHasPart THEN
+    sMsg := 'Mover has no part to unload';
+    M_CheckStart := FALSE;
+ELSE
+    sMsg := '';
+    M_CheckStart := TRUE;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

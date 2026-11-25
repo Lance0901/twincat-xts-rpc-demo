@@ -1,0 +1,113 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_CaGroup" Id="{4c000b88-ddec-4cf6-b26b-a1147d77f901}" SpecialFunc="None">
+    <Declaration><![CDATA[// CA group 管理：mover 加進 group、enable；bEnable 回 FALSE 時 disable 並 ungroup。
+FUNCTION_BLOCK FB_CaGroup
+VAR_INPUT
+    bEnable : BOOL;
+    bReset : BOOL;
+END_VAR
+VAR_IN_OUT
+    Group : Tc3_McCoordinatedMotion.AXES_GROUP_REF;
+    Axes : ARRAY[1..GVL_Param.cMoverCount] OF AXIS_REF;
+END_VAR
+VAR_OUTPUT
+    bReady : BOOL;          // group enable 完成且軸數正確
+    bError : BOOL;
+    nErrorId : UDINT;
+    nState : UINT;          // 0 idle, 10 add, 20 enable, 30 ready, 80 disable, 90 ungroup
+    nAxesCount : UDINT;
+END_VAR
+VAR
+    aAdd : ARRAY[1..GVL_Param.cMoverCount] OF Tc3_McCoordinatedMotion.MC_AddAxisToGroup;
+    fbEnable : Tc3_McCoordinatedMotion.MC_GroupEnable;
+    fbDisable : Tc3_McCoordinatedMotion.MC_GroupDisable;
+    fbUngroup : Tc3_McCoordinatedMotion.MC_UngroupAllAxes;
+    fbReset : Tc3_McCoordinatedMotion.MC_GroupReset;
+    bAllAdded : BOOL;
+    i : INT;
+END_VAR
+VAR CONSTANT
+    cErrNoGroup : UDINT := 16#E202;     // CA group 物件不存在 (GroupOID = 0)
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// 逾時由 FB_XTS_Control 的初始化步驟計時 (cInitStepTimeout)
+nAxesCount := Group.NcToPlc.Common.GroupAxesCount;
+fbReset(AxesGroup := Group, Execute := bReset);
+IF bReset THEN
+    bError := FALSE;
+    nErrorId := 0;
+    nState := 0;
+END_IF
+IF NOT bEnable AND (nState > 0) AND (nState < 80) THEN
+    nState := 80;
+END_IF
+bAllAdded := TRUE;
+FOR i := 1 TO GVL_Param.cMoverCount DO
+    aAdd[i](AxesGroup := Group, Axis := Axes[i], Execute := (nState = 10),
+        IdentInGroup := Tc3_McCoordinatedMotion.UDINT_TO_IDENTINGROUP(INT_TO_UDINT(i)));
+    bAllAdded := bAllAdded AND aAdd[i].Done;
+    IF aAdd[i].Error THEN
+        bError := TRUE;
+        nErrorId := aAdd[i].ErrorId;
+    END_IF
+END_FOR
+fbEnable(AxesGroup := Group, Execute := (nState = 20));
+fbDisable(AxesGroup := Group, Execute := (nState = 80));
+fbUngroup(AxesGroup := Group, Execute := (nState = 90));
+IF fbUngroup.Error THEN
+    bError := TRUE;
+    nErrorId := fbUngroup.ErrorId;
+END_IF
+IF fbEnable.Error THEN
+    bError := TRUE;
+    nErrorId := fbEnable.ErrorId;
+END_IF
+IF fbDisable.Error THEN
+    bError := TRUE;
+    nErrorId := fbDisable.ErrorId;
+END_IF
+CASE nState OF
+0:
+    IF bEnable AND NOT bError AND NOT bReset THEN
+        IF Group.NcToPlc.Common.GroupOID = 0 THEN
+            bError := TRUE;
+            nErrorId := cErrNoGroup;
+        ELSIF nAxesCount = INT_TO_UDINT(GVL_Param.cMoverCount) THEN
+            nState := 20;
+        ELSE
+            nState := 10;
+        END_IF
+    END_IF
+10:
+    IF bAllAdded THEN
+        nState := 20;
+    END_IF
+20:
+    IF fbEnable.Done THEN
+        nState := 30;
+    END_IF
+30:
+    ;
+80:
+    IF fbDisable.Done AND (Group.NcToPlc.Common.GroupStatus.State =
+        Tc3_McCoordinatedMotion.MC_GROUP_STATE.mcGroupStateDisabled) THEN
+        nState := 90;
+    END_IF
+90:
+    IF fbUngroup.Done AND (nAxesCount = 0) THEN
+        nState := 0;
+    END_IF
+ELSE
+    bError := TRUE;
+    nErrorId := GVL_ErrorId.cErrInvalidState;
+    nState := 0;
+END_CASE
+IF Group.NcToPlc.Common.GroupErrorId <> 0 THEN
+    bError := TRUE;
+    nErrorId := Group.NcToPlc.Common.GroupErrorId;
+END_IF
+bReady := (nState = 30) AND (nAxesCount = INT_TO_UDINT(GVL_Param.cMoverCount)) AND NOT bError;]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>
