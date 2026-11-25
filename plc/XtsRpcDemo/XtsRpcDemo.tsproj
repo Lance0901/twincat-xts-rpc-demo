@@ -8574,7 +8574,7 @@ and will return to Group State Standby when the situation permits.
 							</Value>
 							<Value>
 								<Name>IdDetectionMode</Name>
-								<EnumText>Standard</EnumText>
+								<EnumText>Mover1</EnumText>
 							</Value>
 							<Value>
 								<Name>IdDiagConfiguration.floatBufferSize</Name>
@@ -35018,6 +35018,7 @@ and will return to Group State Standby when the situation permits.
 					<Drive Name="Drive" DrvType="5">
 						<DrvPara>
 							<Analog TorqueSetpointScale="10" ScaleFactorActTorque="0.1"/>
+							<TimeComp TaskDelayCycles="1"/>
 						</DrvPara>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
@@ -35171,6 +35172,7 @@ and will return to Group State Standby when the situation permits.
 					<Drive Name="Drive" DrvType="5">
 						<DrvPara>
 							<Analog TorqueSetpointScale="10" ScaleFactorActTorque="0.1"/>
+							<TimeComp TaskDelayCycles="1"/>
 						</DrvPara>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
@@ -35324,6 +35326,7 @@ and will return to Group State Standby when the situation permits.
 					<Drive Name="Drive" DrvType="5">
 						<DrvPara>
 							<Analog TorqueSetpointScale="10" ScaleFactorActTorque="0.1"/>
+							<TimeComp TaskDelayCycles="1"/>
 						</DrvPara>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
@@ -35477,6 +35480,7 @@ and will return to Group State Standby when the situation permits.
 					<Drive Name="Drive" DrvType="5">
 						<DrvPara>
 							<Analog TorqueSetpointScale="10" ScaleFactorActTorque="0.1"/>
+							<TimeComp TaskDelayCycles="1"/>
 						</DrvPara>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
@@ -35630,6 +35634,7 @@ and will return to Group State Standby when the situation permits.
 					<Drive Name="Drive" DrvType="5">
 						<DrvPara>
 							<Analog TorqueSetpointScale="10" ScaleFactorActTorque="0.1"/>
+							<TimeComp TaskDelayCycles="1"/>
 						</DrvPara>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
@@ -35783,6 +35788,7 @@ and will return to Group State Standby when the situation permits.
 					<Drive Name="Drive" DrvType="5">
 						<DrvPara>
 							<Analog TorqueSetpointScale="10" ScaleFactorActTorque="0.1"/>
+							<TimeComp TaskDelayCycles="1"/>
 						</DrvPara>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
@@ -35936,6 +35942,7 @@ and will return to Group State Standby when the situation permits.
 					<Drive Name="Drive" DrvType="5">
 						<DrvPara>
 							<Analog TorqueSetpointScale="10" ScaleFactorActTorque="0.1"/>
+							<TimeComp TaskDelayCycles="1"/>
 						</DrvPara>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
@@ -36382,7 +36389,7 @@ and will return to Group State Standby when the situation permits.
 		</Motion>
 		<Plc>
 			<Project GUID="{A284BB11-E650-4AA8-A8C9-5142BC64B0BC}" Name="XtsRpcDemoPlc" PrjFilePath="XtsRpcDemoPlc\XtsRpcDemoPlc.plcproj" TmcFilePath="XtsRpcDemoPlc\XtsRpcDemoPlc.tmc" ReloadTmc="true" AmsPort="851" FileArchiveSettings="#x000e" SymbolicMapping="true">
-				<Instance Id="#x08502000" TcSmClass="TComPlcObjDef" KeepUnrestoredLinks="2" TmcHash="{65DC3929-99E9-49D0-91FD-5DE6F5452A48}" TmcPath="XtsRpcDemoPlc\XtsRpcDemoPlc.tmc">
+				<Instance Id="#x08502000" TcSmClass="TComPlcObjDef" KeepUnrestoredLinks="2" TmcHash="{2F8AE4E0-62FF-E573-5FCE-1FF5D02FF0FD}" TmcPath="XtsRpcDemoPlc\XtsRpcDemoPlc.tmc">
 					<Name>XtsRpcDemoPlc Instance</Name>
 					<CLSID ClassFactory="TcPlc30">{08500001-0000-0000-F000-000000000064}</CLSID>
 					<Vars VarGrpType="2" AreaNo="1">

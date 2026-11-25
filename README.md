@@ -35,7 +35,7 @@ csharp/                                  .NET 8 console，NuGet Beckhoff.TwinCAT
 docs/images/                             截圖
 ```
 
-XTS 設定來自另一個已在 UmRT 上跑過 CA 繞線的示範專案，從 6 mover 刪成 4 mover（刪掉 Mover 5/6 的 TcCOM 物件、NC 軸與 mapping），其他參數不動：模擬模式、軌道 3000 mm、mover 啟動位置 `UseOffsetAndDistance`（offset 40 mm、間距 400 mm、±10 mm 隨機）。
+XTS 設定來自另一個已在 UmRT 上跑過 CA 繞線的示範專案，從 6 mover 刪成 4 mover（刪掉 Mover 5/6 的 TcCOM 物件、NC 軸與 mapping），XPU 的 `IdDetectionMode` 從 `Standard` 改成 `Mover1`（讓 Find mover 1 真的執行），其他參數不動：模擬模式、軌道 3000 mm、mover 啟動位置 `UseOffsetAndDistance`（offset 40 mm、間距 400 mm、±10 mm 隨機）。
 
 ## 架構
 
@@ -184,7 +184,10 @@ Ready 後掉出可控 ─► Error，需重新 M_InitialXTS
 ```
 
 - 順序照需求：**Find mover 1 → 送電 → 啟用 CA group**。
-- **Find mover 1 在這個模擬設定下會略過**：XPU 的 `IdDetectionMode` 是 `Standard`（XTS 參數說明：「Standard means that mover ID detection is off」），程式讀到不是 `Mover1` 就跳過並在 `sInitMsg` 寫 `FindMover1 skipped (IdDetectionMode = Standard)`；mover 編號照 XTS 設定順序（`MoverSortOrder = Descending`）。要真的做，把 XPU 的 `IdDetectionMode` 改成 `Mover1`，程式會呼叫 `TriggerMoverIdDetection()` 並等 `GetIsMoverIdDetectionValid()`。做法照 InfoSys [PLC variant I (trigger via XtsUtility)](https://infosys.beckhoff.com/content/1033/xts_software/10484562315.html)：前置條件只有「所有 mover 位置有效」與「XPU 的模式是 Mover1」，該頁**沒有說要不要先送電，也沒提模擬模式**。所以順序維持需求的「先 Find mover 1 再送電」，模擬模式能不能做、是否要先送電：**沒測，待 runtime 驗證**。
+- **Find mover 1 會真的執行**：XPU 的 `IdDetectionMode` 設成 `Mover1`（`plc/XtsRpcDemo/XtsRpcDemo.tsproj`，XTS ProcessingUnit 1 的 `<Value><Name>IdDetectionMode</Name>`）。程式確認模式是 `Mover1` 後呼叫 `TriggerMoverIdDetection()`，等 `GetIsMoverIdDetectionValid()`（失敗看 `GetHasMoverIdDetectionError()`），`sInitMsg` 依序顯示 `FindMover1: Mover ID detection triggered, waiting for result` → `FindMover1 done (Mover ID detection valid), PowerOn`。做法照 InfoSys [PLC variant I (trigger via XtsUtility)](https://infosys.beckhoff.com/content/1033/xts_software/10484562315.html)：前置條件是「所有 mover 位置有效」與「XPU 的模式是 Mover1」。
+- **為什麼先 detection 再送電**：XTS 驅動的事件清單（tsproj 內的 TMC 描述）有 `9016 AxisEnabledBeforeMoverIdDetectionError`：「The mover {0} gets an enable command before Mover 1 Detection is processed」。也就是 mover 在 detection 完成前被 enable 會報錯，所以順序是 Find mover 1 → MC_Power → CA group enable。
+- **防呆**：若 XPU 被改回 `Standard`，程式不做 detection、直接進 PowerOn，`sInitMsg` 寫 `FindMover1 skipped: XPU IdDetectionMode is not Mover1, PowerOn`，mover 編號照 XTS 設定順序（`MoverSortOrder = Descending`）。
+- **模擬模式下 Mover 1 detection 能不能完成：初判可以（XPU 的 `MoverIdStartUpSimulationMode` 會模擬 mover ID），待 runtime 驗證**；之前同一套模擬設定都用 `Standard`，沒跑過 detection。
 - `M_ReadXTS_Status` 的 `eStep`（`E_InitStep` 值）與 `sStepMsg` 看得到目前步驟與失敗原因。
 - 初始化完成前，`M_StartCycle` 與所有 mover / 站命令都被 `F_CheckCmdAllowed` 擋下。
 
@@ -319,7 +322,7 @@ C# 示範流程：
 | 陣列元素（`aMover[n]`）與繼承 method（`fbPress.M_Start`）能否 `InvokeRpcMethod` | 同上；已準備 REFERENCE 與總控層備案 |
 | STRING 輸出參數、enum 輸出參數、STRUCT→byte[] 的實際 marshal 結果 | 同上 |
 | method 實際執行的執行緒與時機 | 同上；只有 InfoSys 文字依據 |
-| Find mover 1（Mover ID detection）在模擬模式下能否執行、是否需先送電 | 設定是 `IdDetectionMode = Standard`，程式會略過；改 `Mover1` 後的行為沒測 |
+| Find mover 1（Mover ID detection）在模擬模式下能否完成 | 已設 `IdDetectionMode = Mover1`，只 Build 過；之前的模擬設定都用 `Standard`，沒跑過 detection |
 | 4 mover 版本的 XTS 設定能否 Activate | 從已驗證的 6 mover 設定刪掉 2 台，只 Build 過 |
 | 7 支 NC 模擬軸的參數（速度上限、加速度） | 用 TwinCAT 預設值，沒調 |
 | C# `dotnet run` | 沒有 runtime 可連，只做 `dotnet build` |
@@ -341,6 +344,6 @@ A TwinCAT 3 demo that runs a simulated XTS (4 movers, 3 stations: Load / Press /
 - **Three FB layers, each with RPC methods**: `FB_XTS_Control` (`MAIN.fbXts`: `M_InitialXTS`, `M_ReadXTS_Status`, `M_GetStatus`, `M_SetMode`, `M_StartCycle`, `M_Stop`, plus fallback `M_MoveTo` / `M_SendToStation` / `M_StartStation` / `M_ReleaseStation`), `FB_Mover` (`MAIN.fbXts.aMover[n]`: `M_MoveTo`, `M_Stop`, `M_Reset`, `M_GetStatus`) and `FB_Station` (`MAIN.fbXts.fbLoad|fbPress|fbUnload`: `M_Start`, `M_Release`, `M_Reset`, `M_GetStatus`).
 - **Methods only validate and set request flags**; MC function blocks run in the cyclic body. Beckhoff documents that RPC methods are called after the PLC cycle using the remaining cycle time, so they must return quickly.
 - **Ready gate + Auto/Manual lock** in one function (`F_CheckCmdAllowed`); `M_Stop` is always accepted.
-- **Init sequence**: reset → XTS environment init → wait for movers → Find mover 1 (skipped while `IdDetectionMode = Standard`) → power on → enable the CA group.
+- **Init sequence**: reset → XTS environment init → wait for movers → Find mover 1 (`IdDetectionMode = Mover1`; the XTS event 9016 "AxisEnabledBeforeMoverIdDetectionError" requires detection before enabling the movers) → power on → enable the CA group.
 - **Status**: PLC builds with 0 errors (1 inherited obsolete warning), `dotnet build` succeeds. Nothing has been activated or run yet; RPC calls on array elements and inherited methods are unverified, and fallback paths are selectable from the command line.
 - UmRT time ran about 4.25x slower than wall-clock time on the test PC, so recorded speeds and PLC timings do not represent real hardware.

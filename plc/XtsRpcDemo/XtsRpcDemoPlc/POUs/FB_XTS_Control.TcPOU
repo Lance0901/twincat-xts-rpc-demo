@@ -137,24 +137,25 @@ E_InitStep.WaitMovers:
         sInitMsg := F_InitStepName(eInitStep);
     END_IF
 E_InitStep.FindMover1:
-    // IdDetectionMode = Standard 時 XTS 不做 Mover ID detection，mover 編號照設定順序
+    // 專案設定 IdDetectionMode = Mover1；detection 要在 MC_Power 之前 (XTS 事件 9016)
     IF fbEnvironment.XpuTcIo(1).GetMoverIdDetectionMode() = MoverIdDetectionMode.Mover1 THEN
         IF fbEnvironment.XpuTcIo(1).TriggerMoverIdDetection() THEN
             eInitStep := E_InitStep.FindMover1Wait;
-            sInitMsg := 'FindMover1: detection triggered';
+            sInitMsg := 'FindMover1: Mover ID detection triggered, waiting for result';
         ELSE
             M_SetInitError(nId := GVL_ErrorId.cErrIdDetection, sText := 'TriggerMoverIdDetection rejected');
         END_IF
     ELSE
+        // 防呆：XPU 被改回 Standard 時不做 detection，mover 編號照設定順序
         eInitStep := E_InitStep.PowerOn;
-        sInitMsg := 'FindMover1 skipped (IdDetectionMode = Standard), PowerOn';
+        sInitMsg := 'FindMover1 skipped: XPU IdDetectionMode is not Mover1, PowerOn';
     END_IF
 E_InitStep.FindMover1Wait:
     IF fbEnvironment.XpuTcIo(1).GetHasMoverIdDetectionError() THEN
         M_SetInitError(nId := GVL_ErrorId.cErrIdDetection, sText := 'Mover ID detection error');
     ELSIF fbEnvironment.XpuTcIo(1).GetIsMoverIdDetectionValid() THEN
         eInitStep := E_InitStep.PowerOn;
-        sInitMsg := F_InitStepName(eInitStep);
+        sInitMsg := 'FindMover1 done (Mover ID detection valid), PowerOn';
     END_IF
 E_InitStep.PowerOn:
     bPowerOn := TRUE;
