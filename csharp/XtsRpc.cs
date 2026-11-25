@@ -77,6 +77,8 @@ internal sealed class XtsRpc
 
     public RpcResult MoverStop(int mover) => Call(_opt.MoverPath(mover), "M_Stop");
 
+    public RpcResult MoverReset(int mover) => Call(_opt.MoverPath(mover), "M_Reset");
+
     /// <summary>輸出：fPosition, fVelocity, bBusy, bError, nErrorId, bHasPart, bPressed, bPowered</summary>
     public RpcResult MoverGetStatus(int mover) => Call(_opt.MoverPath(mover), "M_GetStatus");
 
@@ -89,6 +91,8 @@ internal sealed class XtsRpc
     public RpcResult StationRelease(int station) => _opt.StationViaControl
         ? Call(_opt.ControlPath, "M_ReleaseStation", (ushort)station)
         : Call(_opt.StationPath(station), "M_Release");
+
+    public RpcResult StationReset(int station) => Call(_opt.StationPath(station), "M_Reset");
 
     /// <summary>輸出：nState, nStepNow, bOccupiedNow, nMoverNow, bErrorNow, nErrorIdNow, nDone, fAxisX, fAxisY, fAxisZ</summary>
     public RpcResult StationGetStatus(int station) => Call(_opt.StationPath(station), "M_GetStatus");
