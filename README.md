@@ -552,17 +552,25 @@ Offline 在 JS 重現：Initial 步驟（`sInitMsg` 字串照 PLC）、ready 閘
 
 ### Runtime 截圖
 
-C# console 第 5–8 段輸出（站手動、Auto 模式鎖、自動循環時間、Stop）。錄製時 console codepage 沒切 UTF-8，中文是亂碼，英文、數字與 `sMsg` 可讀（解法見[疑難排解](#疑難排解)）：
+C# console 第 5–8 段輸出（站手動、Auto 模式鎖、自動循環時間、Stop），預設中文：
 
-![C# console 輸出](docs/images/runtime-console-output.png)
+![C# console 輸出（中文）](docs/images/runtime-console-output.png)
+
+同一段加 `--lang en` 的英文輸出：
+
+![C# console 輸出（English）](docs/images/runtime-console-output-en.png)
 
 XTS Viewer：console 示範跑完後 4 台 mover 的位置（Hardware / NC Position）與 12 個 module：
 
 ![XTS Viewer](docs/images/runtime-xts-viewer.png)
 
-網頁 Live：Auto 模式下 `M_StartCycle(2)` 一輪完成（`Done (mover 2 → 站 3)`、各站完成 3 次），結果欄是 PLC 回的 `sMsg`：
+網頁 Live：已 ready 時按 Initial 被拒（`Already ready`），Auto 模式下 `M_StartCycle(1)` 一輪完成（`Done (mover 1 → 站 3)`），結果欄是 PLC 回的 `sMsg`：
 
-![網頁 Live](docs/images/runtime-web-live.png)
+![網頁 Live（中文）](docs/images/runtime-web-live.png)
+
+網址加 `?lang=en` 的英文介面，`M_StartCycle(2)` 一輪完成：
+
+![網頁 Live（English）](docs/images/runtime-web-live-en.png)
 
 PLC Build 0 error：
 
