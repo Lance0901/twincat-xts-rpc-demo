@@ -134,8 +134,9 @@ int Run(XtsRpc xts, Options opt)
         return 1;
     }
     Step(Text.Step7Title(cycleMover));
+    uint countBefore = line.CycleCount;
     if (!Cmd($"M_StartCycle({cycleMover})", xts.StartCycle(cycleMover))) return 1;
-    if (!WaitCycle(xts, opt)) return 1;
+    if (!WaitCycle(xts, opt, countBefore)) return 1;
 
     Step(Text.Step8Title);
     PrintCmd("M_Stop", xts.StopAll());
@@ -237,14 +238,22 @@ bool WaitStationDone(XtsRpc xts, Options opt, int station)
     return false;
 }
 
-bool WaitCycle(XtsRpc xts, Options opt)
+// 重跑時 eCycleState / aStationDoneMs 還是上一輪的 Done 值：等 PLC 取走命令 (進 ToStation / InStation 或計數 +1) 才開始判斷
+bool WaitCycle(XtsRpc xts, Options opt, uint countBefore)
 {
     var sw = Stopwatch.StartNew();
     var printed = new bool[LineStatus.StationCount];
     string[] names = { "Load", "Press", "Unload" };
+    bool started = false;
     while (sw.Elapsed.TotalSeconds < opt.StepTimeoutSec)
     {
         var (line, msg) = xts.GetLineStatus();
+        started |= line.CycleState is 10 or 20 || line.CycleCount != countBefore;
+        if (!started)
+        {
+            Thread.Sleep(opt.PollMs);
+            continue;
+        }
         for (int i = 0; i < LineStatus.StationCount; i++)
         {
             if (!printed[i] && line.StationDoneMs[i] > 0)
